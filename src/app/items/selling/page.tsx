@@ -1,63 +1,24 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { loadSellingItemsUseCase } from "@/features/items/application/item-list-query-use-cases";
+import { prismaItemListQueryRepository } from "@/features/items/infrastructure/prisma-item-list-query-repository";
 import { getCurrentUser } from "@/lib/auth/session";
-import { withUser } from "@/db/client";
-import { toItem, toListing } from "@/db/serialize";
 import { formatYen } from "@/lib/format";
 import { markAsSold, unlistItem } from "../transitions";
-import type { Item, Listing } from "@/types/item";
 import styles from "./page.module.css";
 
 export const dynamic = "force-dynamic";
 
-type Row = Item & { listing: Listing | null };
+const itemListQueryDependencies = {
+  repository: prismaItemListQueryRepository,
+};
 
 export default async function SellingItemsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const { rows, shippingFeeByShippingId } = await withUser(user.sub, async (tx) => {
-    const itemRows = await tx.item.findMany({
-      where: { status: "listed", deletedAt: null },
-      orderBy: { createdAt: "desc" },
-    });
-
-    const ids = itemRows.map((r) => r.id);
-    const listingMap = new Map<number, Listing>();
-    if (ids.length > 0) {
-      const lrows = await tx.listing.findMany({ where: { itemId: { in: ids } } });
-      for (const l of lrows) listingMap.set(Number(l.itemId), toListing(l));
-    }
-    const rows: Row[] = itemRows.map((r) => ({
-      ...toItem(r),
-      listing: listingMap.get(Number(r.id)) ?? null,
-    }));
-
-    // 送料は listings の列ではないため、shipping 参照経由で shipping_fees から解決する。
-    const shippingIds = [
-      ...new Set(rows.map((r) => r.listing?.shipping_id).filter((x): x is number => x != null)),
-    ];
-    const shippingFeeByShippingId = new Map<number, number>();
-    if (shippingIds.length > 0) {
-      const ships = await tx.shipping.findMany({
-        where: { id: { in: shippingIds.map((n) => BigInt(n)) } },
-        select: { id: true, shippingServiceId: true, shippingSizeId: true },
-      });
-      for (const s of ships) {
-        const fee = await tx.shippingFee.findUnique({
-          where: {
-            shippingServiceId_shippingSizeId: {
-              shippingServiceId: s.shippingServiceId,
-              shippingSizeId: s.shippingSizeId,
-            },
-          },
-          select: { fee: true },
-        });
-        if (fee?.fee != null) shippingFeeByShippingId.set(Number(s.id), fee.fee.toNumber());
-      }
-    }
-
-    return { rows, shippingFeeByShippingId };
+  const rows = await loadSellingItemsUseCase(itemListQueryDependencies, {
+    userId: user.sub,
   });
 
   return (
@@ -85,11 +46,7 @@ export default async function SellingItemsPage() {
                     <Stat label="売価" value={formatYen(r.listing?.selling_price)} />
                     <Stat
                       label="送料"
-                      value={formatYen(
-                        r.listing?.shipping_id != null
-                          ? shippingFeeByShippingId.get(r.listing.shipping_id) ?? null
-                          : null,
-                      )}
+                      value={formatYen(r.shippingFee)}
                     />
                     <Stat label="販売手数料" value={formatYen(r.listing?.selling_fee)} />
                     <Stat label="梱包材費" value={formatYen(r.listing?.packaging_cost)} />
