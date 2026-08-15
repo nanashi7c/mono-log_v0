@@ -2,8 +2,14 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { transitionItemUseCase } from "@/features/items/application/item-transition-use-cases";
+import type { ItemTransitionAction } from "@/features/items/domain/item-transition";
+import { prismaItemTransitionRepository } from "@/features/items/infrastructure/prisma-item-transition-repository";
 import { getCurrentUser } from "@/lib/auth/session";
-import { withUser } from "@/db/client";
+
+const itemTransitionDependencies = {
+  repository: prismaItemTransitionRepository,
+};
 
 async function authed() {
   const user = await getCurrentUser();
@@ -19,57 +25,35 @@ function revalidateItemViews() {
   revalidatePath("/dashboard");
 }
 
-// planned -> owned. 購入予定一覧の「購入済み」ボタン。
-export async function markAsPurchased(itemId: number) {
+async function transitionItem(
+  itemId: number,
+  action: ItemTransitionAction,
+): Promise<void> {
   const user = await authed();
-  await withUser(user.sub, (tx) =>
-    tx.item.updateMany({ where: { id: BigInt(itemId) }, data: { status: "owned" } }),
-  );
-  revalidateItemViews();
-}
-
-// owned -> listed. 所有物一覧の「出品する」ボタン。listings 行を作成する。
-export async function listItem(itemId: number) {
-  const user = await authed();
-  // listings.item_id は UNIQUE。既に行があれば作らない（重複作成を避ける）。
-  await withUser(user.sub, async (tx) => {
-    const existing = await tx.listing.findUnique({
-      where: { itemId: BigInt(itemId) },
-      select: { itemId: true },
-    });
-    if (!existing) await tx.listing.create({ data: { itemId: BigInt(itemId) } });
-    await tx.item.updateMany({ where: { id: BigInt(itemId) }, data: { status: "listed" } });
+  await transitionItemUseCase(itemTransitionDependencies, {
+    userId: user.sub,
+    itemId,
+    action,
   });
   revalidateItemViews();
 }
 
-// owned -> planned. 所有物一覧の「購入予定へ戻す」ボタン。
-export async function restoreToPlanned(itemId: number) {
-  const user = await authed();
-  await withUser(user.sub, (tx) =>
-    tx.item.updateMany({ where: { id: BigInt(itemId) }, data: { status: "planned" } }),
-  );
-  revalidateItemViews();
+export async function markAsPurchased(itemId: number): Promise<void> {
+  await transitionItem(itemId, "mark_purchased");
 }
 
-// listed -> sold. 出品商品一覧の「売却済み」ボタン。論理削除（deleted_at を記録）。
-export async function markAsSold(itemId: number) {
-  const user = await authed();
-  await withUser(user.sub, (tx) =>
-    tx.item.updateMany({
-      where: { id: BigInt(itemId) },
-      data: { status: "sold", deletedAt: new Date() },
-    }),
-  );
-  revalidateItemViews();
+export async function listItem(itemId: number): Promise<void> {
+  await transitionItem(itemId, "start_listing");
 }
 
-// listed -> owned. 出品商品一覧の「出品取り下げ」ボタン。listings 行を削除する。
-export async function unlistItem(itemId: number) {
-  const user = await authed();
-  await withUser(user.sub, async (tx) => {
-    await tx.listing.deleteMany({ where: { itemId: BigInt(itemId) } });
-    await tx.item.updateMany({ where: { id: BigInt(itemId) }, data: { status: "owned" } });
-  });
-  revalidateItemViews();
+export async function restoreToPlanned(itemId: number): Promise<void> {
+  await transitionItem(itemId, "restore_planned");
+}
+
+export async function markAsSold(itemId: number): Promise<void> {
+  await transitionItem(itemId, "mark_sold");
+}
+
+export async function unlistItem(itemId: number): Promise<void> {
+  await transitionItem(itemId, "cancel_listing");
 }
