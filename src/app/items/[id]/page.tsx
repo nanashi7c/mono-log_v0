@@ -1,21 +1,19 @@
 import Image from "next/image";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { loadItemDetailUseCase } from "@/features/items/application/item-detail-query-use-cases";
+import { prismaItemDetailQueryRepository } from "@/features/items/infrastructure/prisma-item-detail-query-repository";
 import { getCurrentUser } from "@/lib/auth/session";
-import { withUser } from "@/db/client";
-import { toItem, toPlan, toListing } from "@/db/serialize";
 import { signedImageUrl } from "@/lib/image";
 import { formatDate, formatYen } from "@/lib/format";
-import type {
-  ItemStatus,
-  Plan,
-  Platform,
-  Service,
-  Size,
-} from "@/types/item";
+import type { ItemStatus, Plan } from "@/types/item";
 import styles from "./page.module.css";
 
 export const dynamic = "force-dynamic";
+
+const itemDetailQueryDependencies = {
+  repository: prismaItemDetailQueryRepository,
+};
 
 const statusLabel: Record<ItemStatus, string> = {
   planned: "購入予定",
@@ -43,69 +41,9 @@ export default async function ItemDetailPage({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const result = await withUser(user.sub, async (tx) => {
-    const itemRow = await tx.item.findFirst({ where: { id: BigInt(itemId) } });
-    if (!itemRow) return null;
-    const item = toItem(itemRow);
-
-    const planRow = await tx.plan.findUnique({ where: { itemId: BigInt(itemId) } });
-    const plan = planRow ? toPlan(planRow) : null;
-
-    const listingRow = await tx.listing.findUnique({ where: { itemId: BigInt(itemId) } });
-    const listing = listingRow ? toListing(listingRow) : null;
-
-    const links = await tx.itemCategory.findMany({
-      where: { itemId: BigInt(itemId) },
-      select: { category: { select: { id: true, name: true, color: true } } },
-    });
-    const categories = links.map((l) => ({
-      id: l.category.id,
-      name: l.category.name,
-      color: l.category.color,
-    }));
-
-    let platform: Pick<Platform, "id" | "name"> | null = null;
-    let service: Pick<Service, "id" | "shipping_service"> | null = null;
-    let size: Pick<Size, "id" | "shipping_size"> | null = null;
-    let shippingFee: number | null = null;
-    if (listing) {
-      if (listing.platform_id != null) {
-        platform = await tx.platform.findUnique({
-          where: { id: listing.platform_id },
-          select: { id: true, name: true },
-        });
-      }
-      if (listing.shipping_id != null) {
-        const sh = await tx.shipping.findUnique({
-          where: { id: BigInt(listing.shipping_id) },
-          select: { shippingServiceId: true, shippingSizeId: true },
-        });
-        if (sh) {
-          const svc = await tx.service.findUnique({
-            where: { id: sh.shippingServiceId },
-            select: { id: true, shippingService: true },
-          });
-          const sz = await tx.size.findUnique({
-            where: { id: sh.shippingSizeId },
-            select: { id: true, shippingSize: true },
-          });
-          const fee = await tx.shippingFee.findUnique({
-            where: {
-              shippingServiceId_shippingSizeId: {
-                shippingServiceId: sh.shippingServiceId,
-                shippingSizeId: sh.shippingSizeId,
-              },
-            },
-            select: { fee: true },
-          });
-          service = svc ? { id: svc.id, shipping_service: svc.shippingService } : null;
-          size = sz ? { id: sz.id, shipping_size: sz.shippingSize } : null;
-          shippingFee = fee?.fee != null ? fee.fee.toNumber() : null;
-        }
-      }
-    }
-
-    return { item, plan, listing, categories, platform, service, size, shippingFee };
+  const result = await loadItemDetailUseCase(itemDetailQueryDependencies, {
+    userId: user.sub,
+    itemId,
   });
 
   if (!result) notFound();
