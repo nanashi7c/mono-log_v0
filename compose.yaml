@@ -1,7 +1,6 @@
 services:
   db:
     image: postgres:16
-    container_name: monolog-dev-db
     environment:
       POSTGRES_USER: monolog_admin # RDSと同じマスターユーザ名に合わせる
       POSTGRES_PASSWORD: localdev # ローカル専用の固定パスワード（本番はSSM）
