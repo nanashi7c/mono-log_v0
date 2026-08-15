@@ -27,11 +27,11 @@ type Props = {
   plan?: Plan | null;
   listing?: Listing | null;
   imageUrl?: string | null;
-  categories: Pick<Category, "id" | "name" | "color">[];
-  selectedCategoryIds?: number[];
-  platforms: Pick<Platform, "id" | "name">[];
-  services: Pick<Service, "id" | "shipping_service">[];
-  sizes: Pick<Size, "id" | "shipping_size">[];
+  categories: readonly Readonly<Pick<Category, "id" | "name" | "color">>[];
+  selectedCategoryIds?: readonly number[];
+  platforms: readonly Readonly<Pick<Platform, "id" | "name">>[];
+  services: readonly Readonly<Pick<Service, "id" | "shipping_service">>[];
+  sizes: readonly Readonly<Pick<Size, "id" | "shipping_size">>[];
   // shipping_id (listings) is composed of (service_id, size_id) at save time.
   initialServiceId?: number | null;
   initialSizeId?: number | null;
