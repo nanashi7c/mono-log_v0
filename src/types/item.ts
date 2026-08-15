@@ -1,7 +1,6 @@
-// Generated to match supabase/migrations/0002_v1_redesign.sql.
-// `bigint` and `integer` Postgres columns are surfaced as JS `number` by supabase-js.
+import type { ItemStatus } from "@/features/items/domain/status";
 
-export type ItemStatus = "planned" | "owned" | "listed" | "sold";
+export type { ItemStatus } from "@/features/items/domain/status";
 
 export type Category = {
   id: number;

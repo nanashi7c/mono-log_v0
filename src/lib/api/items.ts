@@ -1,14 +1,15 @@
 // REST API(items) で使う検証・整形ロジック。route ハンドラ間で共有する。
 import type { Tx } from "@/db/client";
-import type { ItemStatus } from "@/types/item";
+import {
+  isItemStatus,
+  type ItemStatus,
+} from "@/features/items/domain/status";
 import { parseActualPrice } from "@/lib/validation/actual-price";
 import {
   INTEGER_MAX,
   parseOptionalInteger,
   parseRequiredInteger,
 } from "@/lib/validation/numeric";
-
-export const ITEM_STATUSES: ItemStatus[] = ["planned", "owned", "listed", "sold"];
 
 // INSERT/UPDATE 用に整えた item の値（camelCase）。
 export type ItemInput = {
@@ -53,10 +54,10 @@ export function parseItemBody(
 
   let status: ItemStatus = "owned";
   if (b.status !== undefined) {
-    if (typeof b.status !== "string" || !ITEM_STATUSES.includes(b.status as ItemStatus)) {
+    if (!isItemStatus(b.status)) {
       return { ok: false, error: `invalid status: ${String(b.status)}` };
     }
-    status = b.status as ItemStatus;
+    status = b.status;
   }
 
   const quantityResult = parseOptionalInteger(b.quantity, {
