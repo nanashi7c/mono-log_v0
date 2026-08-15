@@ -1,10 +1,15 @@
 import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/session";
-import { withUser } from "@/db/client";
 import ItemForm from "@/components/item-form";
+import { loadItemFormOptionsUseCase } from "@/features/items/application/item-form-query-use-cases";
+import { prismaItemFormQueryRepository } from "@/features/items/infrastructure/prisma-item-form-query-repository";
+import { getCurrentUser } from "@/lib/auth/session";
 import { createItem } from "../actions";
 
 export const dynamic = "force-dynamic";
+
+const itemFormQueryDependencies = {
+  repository: prismaItemFormQueryRepository,
+};
 
 export default async function NewItemPage({
   searchParams,
@@ -15,37 +20,17 @@ export default async function NewItemPage({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const data = await withUser(user.sub, async (tx) => {
-    const cats = await tx.category.findMany({
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, color: true },
-    });
-    const plats = await tx.platform.findMany({
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    });
-    const svcs = (
-      await tx.service.findMany({
-        orderBy: { shippingService: "asc" },
-        select: { id: true, shippingService: true },
-      })
-    ).map((s) => ({ id: s.id, shipping_service: s.shippingService }));
-    const szs = (
-      await tx.size.findMany({
-        orderBy: { shippingSize: "asc" },
-        select: { id: true, shippingSize: true },
-      })
-    ).map((s) => ({ id: s.id, shipping_size: s.shippingSize }));
-    return { cats, plats, svcs, szs };
+  const options = await loadItemFormOptionsUseCase(itemFormQueryDependencies, {
+    userId: user.sub,
   });
 
   return (
     <ItemForm
       mode="create"
-      categories={data.cats}
-      platforms={data.plats}
-      services={data.svcs}
-      sizes={data.szs}
+      categories={options.categories}
+      platforms={options.platforms}
+      services={options.services}
+      sizes={options.sizes}
       action={createItem}
       error={error}
     />
