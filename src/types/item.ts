@@ -118,7 +118,7 @@ export type Profile = {
 
 // Composite shapes used by the UI.
 export type ItemWithCategories = Item & {
-  categories: Pick<Category, "id" | "name" | "color">[];
+  categories: readonly Readonly<Pick<Category, "id" | "name" | "color">>[];
 };
 
 export type PlannedItem = ItemWithCategories & { plan: Plan | null };
