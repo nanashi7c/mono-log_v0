@@ -1,10 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { withUser } from "@/db/client";
-import { toItem, toCategory } from "@/db/serialize";
+import { exportItemsUseCase } from "@/features/items/application/item-export-use-cases";
+import { prismaItemExportRepository } from "@/features/items/infrastructure/prisma-item-export-repository";
 import { getApiUser, unauthorized, dbErrorResponse } from "@/lib/auth/api";
-import { categoryIdsByItem } from "@/lib/api/items";
 
 export const dynamic = "force-dynamic";
+
+const itemExportDependencies = {
+  repository: prismaItemExportRepository,
+};
 
 // GET /api/v1/export … 自分の全データ(カテゴリ＋アイテム)を JSON で返す。
 export async function GET(req: NextRequest) {
@@ -12,28 +15,11 @@ export async function GET(req: NextRequest) {
   if (!user) return unauthorized();
 
   try {
-    const { exportedCategories, exportedItems } = await withUser(user.sub, async (tx) => {
-      // 自分が作成したカテゴリのみ（プリセットは取り込み先に既に存在するため除外）。
-      const catRows = await tx.category.findMany({ where: { userId: user.sub } });
-      const itemRows = await tx.item.findMany();
-      const linkMap = await categoryIdsByItem(tx, itemRows.map((r) => Number(r.id)));
-      return {
-        exportedCategories: catRows.map(toCategory),
-        exportedItems: itemRows.map((r) => ({
-          ...toItem(r),
-          category_ids: linkMap.get(Number(r.id)) ?? [],
-        })),
-      };
+    const backup = await exportItemsUseCase(itemExportDependencies, {
+      userId: user.sub,
     });
-
-    const payload = {
-      version: 1,
-      exported_at: new Date().toISOString(),
-      categories: exportedCategories,
-      items: exportedItems,
-    };
-    return NextResponse.json(payload);
-  } catch (e) {
-    return dbErrorResponse(e);
+    return NextResponse.json(backup);
+  } catch (error) {
+    return dbErrorResponse(error);
   }
 }
