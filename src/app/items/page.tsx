@@ -1,17 +1,20 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Prisma } from "@prisma/client";
-import { getCurrentUser } from "@/lib/auth/session";
-import { withUser } from "@/db/client";
-import { toItem } from "@/db/serialize";
-import { signedImageUrl } from "@/lib/image";
-import ItemCard from "@/components/item-card";
 import FilterBar from "@/components/filter-bar";
+import ItemCard from "@/components/item-card";
+import { parseOwnedItemsFilter } from "@/features/items/adapters/parse-owned-items-filter";
+import { loadOwnedItemsUseCase } from "@/features/items/application/item-list-query-use-cases";
+import { prismaItemListQueryRepository } from "@/features/items/infrastructure/prisma-item-list-query-repository";
+import { getCurrentUser } from "@/lib/auth/session";
+import { signedImageUrl } from "@/lib/image";
 import { listItem, restoreToPlanned } from "./transitions";
-import type { Category, ItemWithCategories } from "@/types/item";
 import styles from "./page.module.css";
 
 export const dynamic = "force-dynamic";
+
+const itemListQueryDependencies = {
+  repository: prismaItemListQueryRepository,
+};
 
 type Search = { q?: string; category?: string };
 
@@ -24,53 +27,13 @@ export default async function OwnedItemsPage({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const { list, categoryOptions } = await withUser(user.sub, async (tx) => {
-    const cats = await tx.category.findMany({
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, color: true },
-    });
-
-    // 検索・カテゴリ絞り込みはリレーションフィルタで一括表現する。
-    const where: Prisma.ItemWhereInput = {
-      status: { in: ["owned", "listed"] },
-      deletedAt: null,
-    };
-    if (q && q.trim()) {
-      const term = q.trim();
-      where.OR = [
-        { name: { contains: term, mode: "insensitive" } },
-        { notes: { contains: term, mode: "insensitive" } },
-      ];
-    }
-    if (category === "__none__") {
-      where.itemCategories = { none: {} };
-    } else if (category) {
-      where.itemCategories = { some: { categoryId: Number(category) } };
-    }
-
-    const rows = await tx.item.findMany({ where, orderBy: { createdAt: "desc" } });
-
-    // 各 item のカテゴリ（M:N）をまとめて取得する。
-    const catMap = new Map<number, Pick<Category, "id" | "name" | "color">[]>();
-    if (rows.length > 0) {
-      const links = await tx.itemCategory.findMany({
-        where: { itemId: { in: rows.map((r) => r.id) } },
-        select: { itemId: true, category: { select: { id: true, name: true, color: true } } },
-      });
-      for (const l of links) {
-        const k = Number(l.itemId);
-        const arr = catMap.get(k) ?? [];
-        arr.push({ id: l.category.id, name: l.category.name, color: l.category.color });
-        catMap.set(k, arr);
-      }
-    }
-
-    const list: ItemWithCategories[] = rows.map((r) => ({
-      ...toItem(r),
-      categories: catMap.get(Number(r.id)) ?? [],
-    }));
-    return { list, categoryOptions: cats };
-  });
+  const { items: list, categoryOptions } = await loadOwnedItemsUseCase(
+    itemListQueryDependencies,
+    {
+      userId: user.sub,
+      filter: parseOwnedItemsFilter(q, category),
+    },
+  );
 
   const signedUrls = await Promise.all(list.map((i) => signedImageUrl(i.image_url)));
 

@@ -1,18 +1,18 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import type { PlannedItemListRow } from "@/features/items/application/item-list-data";
+import { loadPlannedItemsUseCase } from "@/features/items/application/item-list-query-use-cases";
+import { prismaItemListQueryRepository } from "@/features/items/infrastructure/prisma-item-list-query-repository";
 import { getCurrentUser } from "@/lib/auth/session";
-import { withUser } from "@/db/client";
-import { toItem, toPlan } from "@/db/serialize";
 import { formatYen } from "@/lib/format";
 import { markAsPurchased } from "../transitions";
-import type { Item, Plan, Category } from "@/types/item";
+import type { Plan } from "@/types/item";
 import styles from "./page.module.css";
 
 export const dynamic = "force-dynamic";
 
-type Row = Item & {
-  categories: Pick<Category, "id" | "name" | "color">[];
-  plan: Plan | null;
+const itemListQueryDependencies = {
+  repository: prismaItemListQueryRepository,
 };
 
 function formatPlannedMonth(plan: Plan | null): string | null {
@@ -26,37 +26,10 @@ export default async function PlannedItemsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const rows: Row[] = await withUser(user.sub, async (tx) => {
-    const itemRows = await tx.item.findMany({
-      where: { status: "planned", deletedAt: null },
-      orderBy: { createdAt: "desc" },
-    });
-
-    const ids = itemRows.map((r) => r.id);
-    const planMap = new Map<number, Plan>();
-    const catMap = new Map<number, Pick<Category, "id" | "name" | "color">[]>();
-    if (ids.length > 0) {
-      const planRows = await tx.plan.findMany({ where: { itemId: { in: ids } } });
-      for (const p of planRows) planMap.set(Number(p.itemId), toPlan(p));
-
-      const links = await tx.itemCategory.findMany({
-        where: { itemId: { in: ids } },
-        select: { itemId: true, category: { select: { id: true, name: true, color: true } } },
-      });
-      for (const l of links) {
-        const k = Number(l.itemId);
-        const arr = catMap.get(k) ?? [];
-        arr.push({ id: l.category.id, name: l.category.name, color: l.category.color });
-        catMap.set(k, arr);
-      }
-    }
-
-    return itemRows.map((r) => ({
-      ...toItem(r),
-      categories: catMap.get(Number(r.id)) ?? [],
-      plan: planMap.get(Number(r.id)) ?? null,
-    }));
-  });
+  const rows: readonly PlannedItemListRow[] = await loadPlannedItemsUseCase(
+    itemListQueryDependencies,
+    { userId: user.sub },
+  );
 
   return (
     <div className={styles.container}>
