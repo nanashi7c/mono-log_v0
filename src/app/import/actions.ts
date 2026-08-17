@@ -4,11 +4,9 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/auth/session";
 import { withUser } from "@/db/client";
+import { itemStatusOrDefault } from "@/features/items/domain/status";
 import { parseActualPrice } from "@/lib/validation/actual-price";
 import { INTEGER_MAX, parseOptionalInteger } from "@/lib/validation/numeric";
-import type { ItemStatus } from "@/types/item";
-
-const STATUSES: ItemStatus[] = ["planned", "owned", "listed", "sold"];
 
 type BackupCategory = { id?: number | string; name?: unknown; color?: unknown };
 type BackupItem = {
@@ -100,10 +98,7 @@ export async function importBackup(formData: FormData) {
         if (!quantityResult.ok) {
           throw new Error(`「${name}」: ${quantityResult.error}`);
         }
-        const statusRaw = String(it.status ?? "");
-        const status: ItemStatus = (STATUSES as string[]).includes(statusRaw)
-          ? (statusRaw as ItemStatus)
-          : "owned";
+        const status = itemStatusOrDefault(it.status);
         const purchased = asString(it.purchased_at);
         const row = await tx.item.create({
           data: {

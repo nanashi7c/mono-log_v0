@@ -1,9 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { withUser } from "@/db/client";
 import { toItem } from "@/db/serialize";
+import {
+  isItemStatus,
+  type ItemStatus,
+} from "@/features/items/domain/status";
 import { getApiUser, unauthorized, badRequest, dbErrorResponse } from "@/lib/auth/api";
-import { ITEM_STATUSES, categoryIdsByItem, parseItemBody } from "@/lib/api/items";
-import type { ItemStatus } from "@/types/item";
+import { categoryIdsByItem, parseItemBody } from "@/lib/api/items";
 
 export const dynamic = "force-dynamic";
 
@@ -13,10 +16,13 @@ export async function GET(req: NextRequest) {
   if (!user) return unauthorized();
 
   const statusParam = req.nextUrl.searchParams.get("status");
-  if (statusParam && !ITEM_STATUSES.includes(statusParam as ItemStatus)) {
-    return badRequest(`invalid status: ${statusParam}`);
+  let status: ItemStatus | null = null;
+  if (statusParam !== null) {
+    if (!isItemStatus(statusParam)) {
+      return badRequest(`invalid status: ${statusParam}`);
+    }
+    status = statusParam;
   }
-  const status = statusParam as ItemStatus | null;
 
   try {
     const result = await withUser(user.sub, async (tx) => {
