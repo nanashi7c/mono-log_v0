@@ -303,7 +303,7 @@ create type public.item_status as enum ('planned', 'owned', 'listed', 'sold');
 | `profiles` | authenticated | 自分 | 自分 | 自分 | — |
 | `categories` | authenticated | プリセット OR 自分 | 自分 かつ `is_preset = false` | 自分 | 自分 |
 | `items` | authenticated | 自分 | 自分 | 自分 | 自分 |
-| `items_categories` | authenticated | 親 items が自分 | 親 items が自分 | — | 親 items が自分 |
+| `items_categories` | authenticated | 親 items が自分 | 親 items が自分、かつカテゴリがプリセットまたは自分 | — | 親 items が自分 |
 | `plans` | authenticated | 親 items が自分 | 親 items が自分 | 親 items が自分 | 親 items が自分 |
 | `listings` | authenticated | 親 items が自分 | 親 items が自分 | 親 items が自分 | 親 items が自分 |
 | `platforms` | authenticated | 全行 | — | — | — |

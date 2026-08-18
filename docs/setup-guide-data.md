@@ -226,7 +226,14 @@ create policy items_update on public.items for update using (user_id = app.curre
 create policy items_delete on public.items for delete using (user_id = app.current_user_id());
 
 create policy items_categories_select on public.items_categories for select using (exists (select 1 from public.items i where i.id = item_id and i.user_id = app.current_user_id()));
-create policy items_categories_insert on public.items_categories for insert with check (exists (select 1 from public.items i where i.id = item_id and i.user_id = app.current_user_id()));
+create policy items_categories_insert on public.items_categories for insert with check (
+  exists (select 1 from public.items i where i.id = item_id and i.user_id = app.current_user_id())
+  and exists (
+    select 1 from public.categories c
+    where c.id = category_id
+      and (c.is_preset or c.user_id = app.current_user_id())
+  )
+);
 create policy items_categories_delete on public.items_categories for delete using (exists (select 1 from public.items i where i.id = item_id and i.user_id = app.current_user_id()));
 
 create policy plans_select on public.plans for select using (exists (select 1 from public.items i where i.id = item_id and i.user_id = app.current_user_id()));
@@ -263,7 +270,7 @@ create policy listings_delete on public.listings for delete using (exists (selec
 - `alter table ... enable row level security`: 各テーブルでRLS有効化。
 - `create policy ... for select using (...)` / `for insert with check (...)`: **`using`=対象行の条件、`with check`=書き込む値の条件**。
   - users/categories/items: 自分の`user_id`(usersは`id`)か。categoriesのselectのみ`is_preset or ...`でプリセットも可視、insertは`and not is_preset`でプリセット作成禁止。
-  - items_categories/plans/listings: `exists (select 1 from items i where i.id = item_id and i.user_id = app.current_user_id())`で**親アイテムが自分のものか**を判定(自前のuser_idが無いため)。
+  - items_categories/plans/listings: `exists (select 1 from items i where i.id = item_id and i.user_id = app.current_user_id())`で**親アイテムが自分のものか**を判定(自前のuser_idが無いため)。items_categoriesのinsertは、さらにカテゴリがプリセットまたは自分所有であることも検査する。
 
 ---
 

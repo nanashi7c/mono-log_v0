@@ -59,11 +59,14 @@ export async function POST(req: NextRequest) {
   if (!parsed.ok) return badRequest(parsed.error);
 
   try {
-    const item = await createApiItemUseCase(itemApiCommandDependencies, {
+    const result = await createApiItemUseCase(itemApiCommandDependencies, {
       actor: { userId: user.sub, email: user.email },
       input: parsed.value,
     });
-    return NextResponse.json({ item }, { status: 201 });
+    if (result.status === "invalid_categories") {
+      return badRequest("invalid category_ids");
+    }
+    return NextResponse.json({ item: result.item }, { status: 201 });
   } catch (e) {
     return dbErrorResponse(e);
   }

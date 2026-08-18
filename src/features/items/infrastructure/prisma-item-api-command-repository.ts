@@ -8,6 +8,24 @@ export type ItemApiCommandTransactionRunner = <T>(
   operation: (tx: Tx) => Promise<T>,
 ) => Promise<T>;
 
+const invalidCategoriesResult = Object.freeze({
+  status: "invalid_categories" as const,
+});
+const notFoundResult = Object.freeze({ status: "not_found" as const });
+
+async function hasOnlyVisibleCategories(
+  tx: Tx,
+  categoryIds: readonly number[],
+): Promise<boolean> {
+  const requestedIds = [...new Set(categoryIds)];
+  if (requestedIds.length === 0) return true;
+
+  const visibleCategoryCount = await tx.category.count({
+    where: { id: { in: requestedIds } },
+  });
+  return visibleCategoryCount === requestedIds.length;
+}
+
 async function insertItemCategories(
   tx: Tx,
   itemId: bigint,
@@ -35,6 +53,10 @@ export function createPrismaItemApiCommandRepository(
   return {
     async create(actor, input) {
       return runWithUser(actor.userId, async (tx) => {
+        if (!(await hasOnlyVisibleCategories(tx, input.categoryIds))) {
+          return invalidCategoriesResult;
+        }
+
         await tx.user.upsert({
           where: { id: actor.userId },
           update: {},
@@ -61,7 +83,10 @@ export function createPrismaItemApiCommandRepository(
         });
         await insertItemCategories(tx, row.id, input.categoryIds);
 
-        return toItemApiData(toItem(row), input.categoryIds);
+        return Object.freeze({
+          status: "created" as const,
+          item: toItemApiData(toItem(row), input.categoryIds),
+        });
       });
     },
 
@@ -71,7 +96,10 @@ export function createPrismaItemApiCommandRepository(
           where: { id: BigInt(itemId) },
           select: { id: true },
         });
-        if (!existing) return null;
+        if (!existing) return notFoundResult;
+        if (!(await hasOnlyVisibleCategories(tx, input.categoryIds))) {
+          return invalidCategoriesResult;
+        }
 
         const row = await tx.item.update({
           where: { id: BigInt(itemId) },
@@ -89,7 +117,10 @@ export function createPrismaItemApiCommandRepository(
         });
         await replaceItemCategories(tx, BigInt(itemId), input.categoryIds);
 
-        return toItemApiData(toItem(row), input.categoryIds);
+        return Object.freeze({
+          status: "updated" as const,
+          item: toItemApiData(toItem(row), input.categoryIds),
+        });
       });
     },
   };

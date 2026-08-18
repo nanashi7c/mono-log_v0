@@ -198,11 +198,14 @@ export async function POST(req: NextRequest) {
   if (!parsed.ok) return badRequest(parsed.error);
 
   try {
-    const item = await createApiItemUseCase(itemApiCommandDependencies, {
+    const result = await createApiItemUseCase(itemApiCommandDependencies, {
       actor: { userId: user.sub, email: user.email },
       input: parsed.value,
     });
-    return NextResponse.json({ item }, { status: 201 });
+    if (result.status === "invalid_categories") {
+      return badRequest("invalid category_ids");
+    }
+    return NextResponse.json({ item: result.item }, { status: 201 });
   } catch (e) {
     return dbErrorResponse(e);
   }
@@ -212,8 +215,9 @@ export async function POST(req: NextRequest) {
 - `let body; try { body = await req.json() } catch { return badRequest(...) }`: リクエストボディをJSONとして読む。壊れていれば400。
 - `const parsed = parseItemApiBody(body); if (!parsed.ok) return badRequest(parsed.error)`: 検証。失敗で400。
 - `createApiItemUseCase(...)`: 認証済みユーザーと検証済み入力をcommand境界へ渡す。
-- `prismaItemApiCommandRepository`: 1つのRLSトランザクションで`users`行の自動確保、item作成、カテゴリ紐付け、API DTO変換を行う。
-- `NextResponse.json({ item }, { status: 201 })`: **201 Created**で返す。
+- `prismaItemApiCommandRepository`: 1つのRLSトランザクションでカテゴリ可視性検証、`users`行の自動確保、item作成、カテゴリ紐付け、API DTO変換を行う。利用できるのはプリセットまたは自分のカテゴリだけ。
+- `result.status === "invalid_categories"`: 存在しないカテゴリと他ユーザーの非公開カテゴリを区別せず**400**にし、情報漏えいを防ぐ。
+- `NextResponse.json({ item: result.item }, { status: 201 })`: **201 Created**で返す。
 
 ---
 
@@ -251,20 +255,21 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 ```ts
 export async function PUT(req, ctx) {
   /* getApiUser → parseId → req.json → parseItemApiBody */
-  const item = await updateApiItemUseCase(itemApiCommandDependencies, {
+  const result = await updateApiItemUseCase(itemApiCommandDependencies, {
     userId: user.sub,
     itemId: id,
     input: parsed.value,
   });
-  if (!item) return jsonError(404, "not found");
-  return NextResponse.json({ item });
+  if (result.status === "not_found") return jsonError(404, "not found");
+  if (result.status === "invalid_categories") return badRequest("invalid category_ids");
+  return NextResponse.json({ item: result.item });
 }
 ```
 **逐行解説**
 - 入口はPOSTと同様(認証・id・body検証)。
 - `updateApiItemUseCase(...)`へユーザーID、item ID、検証済み入力を渡す。
-- repositoryはRLS下で存在確認し、コア項目とカテゴリだけを同一トランザクションで更新する。画像・plan・listingは変更しない。
-- 他人または存在しないitemは`null`→**404**、更新後はimmutableなAPI DTOを返す。
+- repositoryはRLS下で存在確認とカテゴリ可視性検証を行い、コア項目とカテゴリだけを同一トランザクションで更新する。画像・plan・listingは変更しない。
+- 他人または存在しないitemは`not_found`→**404**。利用できないカテゴリは`invalid_categories`→**400**となり、既存データは変更しない。更新成功時はimmutableなAPI DTOを返す。
 
 ```ts
 export async function DELETE(req, ctx) {

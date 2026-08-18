@@ -2,8 +2,11 @@ import type {
   ItemApiActor,
   ItemApiCommandInput,
 } from "@/features/items/application/item-api-command-input";
-import type { ItemApiCommandRepository } from "@/features/items/application/item-api-command-ports";
-import type { ItemApiData } from "@/features/items/application/item-api-data";
+import type {
+  CreateItemApiResult,
+  ItemApiCommandRepository,
+  UpdateItemApiResult,
+} from "@/features/items/application/item-api-command-ports";
 
 export type ItemApiCommandDependencies = Readonly<{
   repository: ItemApiCommandRepository;
@@ -23,14 +26,14 @@ export type UpdateApiItemCommand = Readonly<{
 export async function createApiItemUseCase(
   dependencies: ItemApiCommandDependencies,
   command: CreateApiItemCommand,
-): Promise<ItemApiData> {
+): Promise<CreateItemApiResult> {
   return dependencies.repository.create(command.actor, command.input);
 }
 
 export async function updateApiItemUseCase(
   dependencies: ItemApiCommandDependencies,
   command: UpdateApiItemCommand,
-): Promise<ItemApiData | null> {
+): Promise<UpdateItemApiResult> {
   return dependencies.repository.update(
     command.userId,
     command.itemId,

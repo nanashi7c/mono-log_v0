@@ -36,8 +36,8 @@ const item: ItemApiData = Object.freeze({
 
 function createRepository(): ItemApiCommandRepository {
   return {
-    create: vi.fn().mockResolvedValue(item),
-    update: vi.fn().mockResolvedValue(item),
+    create: vi.fn().mockResolvedValue({ status: "created", item }),
+    update: vi.fn().mockResolvedValue({ status: "updated", item }),
   };
 }
 
@@ -55,7 +55,7 @@ describe("item API command use cases", () => {
     );
 
     expect(repository.create).toHaveBeenCalledWith(actor, input);
-    expect(result).toBe(item);
+    expect(result).toEqual({ status: "created", item });
   });
 
   it("forwards update command values to the repository", async () => {
@@ -67,18 +67,35 @@ describe("item API command use cases", () => {
     );
 
     expect(repository.update).toHaveBeenCalledWith("user-1", 1, input);
-    expect(result).toBe(item);
+    expect(result).toEqual({ status: "updated", item });
   });
 
   it("preserves a not-found update result", async () => {
     const repository = createRepository();
-    repository.update = vi.fn().mockResolvedValue(null);
+    repository.update = vi.fn().mockResolvedValue({ status: "not_found" });
 
     const result = await updateApiItemUseCase(
       { repository },
       { userId: "user-1", itemId: 999, input },
     );
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ status: "not_found" });
+  });
+
+  it("preserves an invalid-category create result", async () => {
+    const repository = createRepository();
+    repository.create = vi.fn().mockResolvedValue({
+      status: "invalid_categories",
+    });
+
+    const result = await createApiItemUseCase(
+      { repository },
+      {
+        actor: { userId: "user-1", email: "user@example.com" },
+        input,
+      },
+    );
+
+    expect(result).toEqual({ status: "invalid_categories" });
   });
 });

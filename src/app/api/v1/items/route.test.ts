@@ -62,7 +62,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getApiUser.mockResolvedValue({ sub: "user-1", email: "user@example.com" });
   mocks.loadApiItemsUseCase.mockResolvedValue(items);
-  mocks.createApiItemUseCase.mockResolvedValue(createdItem);
+  mocks.createApiItemUseCase.mockResolvedValue({
+    status: "created",
+    item: createdItem,
+  });
 });
 
 describe("POST /api/v1/items", () => {
@@ -120,6 +123,22 @@ describe("POST /api/v1/items", () => {
     );
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toEqual({ item: createdItem });
+  });
+
+  it("returns 400 without disclosing an unavailable category", async () => {
+    mocks.createApiItemUseCase.mockResolvedValue({
+      status: "invalid_categories",
+    });
+
+    const response = await POST(
+      postRequest('{"name":"New camera","category_ids":[999]}'),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.badRequest).toHaveBeenCalledWith("invalid category_ids");
+    await expect(response.json()).resolves.toEqual({
+      error: "invalid category_ids",
+    });
   });
 
   it("converts command failures to the shared database response", async () => {
