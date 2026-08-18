@@ -1,6 +1,6 @@
 import Image from "next/image";
 import { useState } from "react";
-import { Field } from "@/components/item-form/field";
+import { FieldGroup } from "@/components/item-form/field";
 import styles from "@/components/item-form.module.css";
 
 type ItemImageFieldProps = Readonly<{
@@ -11,7 +11,7 @@ export function ItemImageField({ imageUrl }: ItemImageFieldProps) {
   const [shouldDeleteImage, setShouldDeleteImage] = useState(false);
 
   return (
-    <Field label="画像">
+    <FieldGroup label="画像">
       {imageUrl && !shouldDeleteImage ? (
         <div className={styles.imagePreview}>
           <div className={styles.imageBox}>
@@ -32,6 +32,6 @@ export function ItemImageField({ imageUrl }: ItemImageFieldProps) {
       {imageUrl && shouldDeleteImage ? (
         <input type="hidden" name="delete_image" value="1" />
       ) : null}
-    </Field>
+    </FieldGroup>
   );
 }

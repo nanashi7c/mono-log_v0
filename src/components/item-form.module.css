@@ -66,6 +66,13 @@
   display: block;
 }
 
+.fieldGroup {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
 .fieldLabel {
   margin-bottom: 0.25rem;
   display: block;
@@ -152,6 +159,13 @@
 
 .categoryChip input {
   display: none;
+}
+
+.categoryDot {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: 9999px;
 }
 
 .categoryChipActive {
