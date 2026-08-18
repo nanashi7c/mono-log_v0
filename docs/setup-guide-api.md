@@ -79,78 +79,57 @@ export function dbErrorResponse(e: unknown): NextResponse {
 
 ---
 
-## Step 3. items 共有ロジック `src/lib/api/items.ts`
+## Step 3. items 入力変換とカテゴリ参照
+
+JSON の検証・整形は、外部形式を内部形式へ変換する adapter に置きます。
+
+`src/features/items/adapters/parse-item-api-body.ts`:
+
+```ts
+// 公開contractの抜粋。検証処理の本体はこのファイルを参照してください。
+import type { ItemStatus } from "@/features/items/domain/status";
+
+export type ParsedItemApiBody = Readonly<{
+  status: ItemStatus;
+  name: string;
+  janCode: string | null;
+  quantity: number;
+  notes: string | null;
+  actualPrice: number | null;
+  purchasedAt: string | null;
+  categoryIds: readonly number[];
+}>;
+
+export function parseItemApiBody(body: unknown):
+  | { ok: true; value: ParsedItemApiBody }
+  | { ok: false; error: string } {
+  // name、status、数値境界、category_idsを検証し、snake_caseをcamelCaseへ変換する。
+}
+```
+
+**ポイント**
+- `parseItemApiBody(body)`: 受け取ったJSONを検証・整形する純粋関数。戻り値は`ok`で判定できる共用体です。
+- `ParsedItemApiBody`: API境界専用の読み取り専用型です。フォーム入力用の型と混同しません。
+- `status`: 未指定は`owned`。指定時はドメイン層の`isItemStatus`で検証します。
+- `quantity`、`actual_price`、`category_ids`: 共通の数値検証関数でDB上限を含めて検証します。
+- `category_ids`: 配列の各要素を正の整数へ変換します。
+
+DBへ依存するカテゴリ参照は、入力変換と分けてroute間で共有します。
+
+`src/lib/api/items.ts`:
+
 ```ts
 import type { Tx } from "@/db/client";
-import type { ItemStatus } from "@/types/item";
 
-export const ITEM_STATUSES: ItemStatus[] = ["planned", "owned", "listed", "sold"];
-
-export type ItemInput = { /* status,name,janCode,quantity,notes,actualPrice,purchasedAt,categoryIds */ };
-
-// item_id(number) は BigInt にして検索、結果のキーは Number へ戻す。
-export async function categoryIdsByItem(tx: Tx, ids: number[]): Promise<Map<number, number[]>> {
-  const map = new Map<number, number[]>();
-  if (ids.length === 0) return map;
-  const links = await tx.itemCategory.findMany({
-    where: { itemId: { in: ids.map((n) => BigInt(n)) } },
-    select: { itemId: true, categoryId: true },
-  });
-  for (const l of links) {
-    const k = Number(l.itemId);
-    const arr = map.get(k) ?? [];
-    arr.push(l.categoryId);
-    map.set(k, arr);
-  }
-  return map;
+export async function categoryIdsByItem(
+  tx: Tx,
+  ids: readonly number[],
+): Promise<Map<number, number[]>> {
+  // item_id(number)はBigIntにして一括検索し、結果をitem_idごとにまとめる。
 }
 ```
-**逐行解説**
-- `ITEM_STATUSES`: 許容するstatus値の一覧(検証に使う)。
-- `ItemInput`型: 整形後のアイテム入力(camelCase)。
-- `categoryIdsByItem(tx, ids)`: アイテムID群に対し、紐づくカテゴリIDを**まとめて**取得し`Map<itemId, categoryId[]>`で返す(N+1回避)。
-  - `if (ids.length === 0) return map`: 空なら即返す。
-  - `tx.itemCategory.findMany({ where: { itemId: { in: ids.map(BigInt) } } })`: 中間表から該当リンクを一括取得。`item_id`はBigIntなので`BigInt(n)`に変換、Mapのキーは`Number(l.itemId)`へ戻す。
-  - `for (const l of links) { ... map.set(...) }`: itemIdごとに配列へ詰める。
 
-```ts
-export function parseItemBody(body: unknown):
-  { ok: true; value: ItemInput } | { ok: false; error: string } {
-  if (typeof body !== "object" || body === null) return { ok: false, error: "body must be a JSON object" };
-  const b = body as Record<string, unknown>;
-  const name = typeof b.name === "string" ? b.name.trim() : "";
-  if (!name) return { ok: false, error: "name is required" };
-  let status: ItemStatus = "owned";
-  if (b.status !== undefined) {
-    if (typeof b.status !== "string" || !ITEM_STATUSES.includes(b.status as ItemStatus))
-      return { ok: false, error: `invalid status: ${String(b.status)}` };
-    status = b.status as ItemStatus;
-  }
-  let quantity = 1;
-  if (b.quantity !== undefined) {
-    const q = Number(b.quantity);
-    if (!Number.isInteger(q) || q <= 0) return { ok: false, error: "quantity must be a positive integer" };
-    quantity = q;
-  }
-  const strOrNull = (v: unknown) => { if (v == null) return null; const s = String(v).trim(); return s === "" ? null : s; };
-  const nonNegIntOrNull = (v: unknown) => { if (v == null || v === "") return null; const n = Number(v); return Number.isInteger(n) && n >= 0 ? n : null; };
-  let categoryIds: number[] = [];
-  if (b.category_ids !== undefined) {
-    if (!Array.isArray(b.category_ids)) return { ok: false, error: "category_ids must be an array" };
-    categoryIds = b.category_ids.map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0);
-  }
-  return { ok: true, value: { status, name, janCode: strOrNull(b.jan_code), quantity, notes: strOrNull(b.notes), actualPrice: nonNegIntOrNull(b.actual_price), purchasedAt: strOrNull(b.purchased_at), categoryIds } };
-}
-```
-**逐行解説**
-- `parseItemBody(body)`: 受け取ったJSONを検証＆整形。戻り値は**判別共用体**`{ok:true,value} | {ok:false,error}`(呼び元が`if (!parsed.ok)`で分岐)。
-- `if (typeof body !== "object" || body === null)`: JSONオブジェクトでなければエラー。
-- `name`: 文字列でtrim後、空なら`name is required`。
-- `status`: 未指定は`"owned"`。指定時は`ITEM_STATUSES`に含まれるか検証。
-- `quantity`: 未指定は1。指定時は正の整数か検証。
-- `strOrNull`/`nonNegIntOrNull`: 空→null、数値は0以上のみ、の整形(アプリ側ヘルパと同趣旨)。
-- `category_ids`: 配列か検証し、正の整数だけ残す。
-- 最後に整形済み`ItemInput`を`{ ok: true, value }`で返す。
+`categoryIdsByItem(tx, ids)`は、アイテムID群に紐づくカテゴリIDを一括取得し、`Map<itemId, categoryId[]>`で返します。入力変換にはDB依存を持ち込まず、後続のrepository分離までこのファイルをrouteのDB参照ヘルパとして扱います。
 
 ---
 
@@ -160,8 +139,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { withUser } from "@/db/client";
 import { toItem } from "@/db/serialize";
 import { getApiUser, unauthorized, badRequest, dbErrorResponse } from "@/lib/auth/api";
-import { ITEM_STATUSES, categoryIdsByItem, parseItemBody } from "@/lib/api/items";
-import type { ItemStatus } from "@/types/item";
+import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
+import { isItemStatus, type ItemStatus } from "@/features/items/domain/status";
+import { categoryIdsByItem } from "@/lib/api/items";
 
 export const dynamic = "force-dynamic";
 
@@ -170,10 +150,13 @@ export async function GET(req: NextRequest) {
   if (!user) return unauthorized();
 
   const statusParam = req.nextUrl.searchParams.get("status");
-  if (statusParam && !ITEM_STATUSES.includes(statusParam as ItemStatus)) {
-    return badRequest(`invalid status: ${statusParam}`);
+  let status: ItemStatus | null = null;
+  if (statusParam !== null) {
+    if (!isItemStatus(statusParam)) {
+      return badRequest(`invalid status: ${statusParam}`);
+    }
+    status = statusParam;
   }
-  const status = statusParam as ItemStatus | null;
 
   try {
     const result = await withUser(user.sub, async (tx) => {
@@ -193,7 +176,7 @@ export async function GET(req: NextRequest) {
 - `export const dynamic = "force-dynamic"`: 毎回サーバ実行(キャッシュ無効)。
 - `const user = await getApiUser(req); if (!user) return unauthorized();`: **全ハンドラ共通の入口**。Bearer検証、失敗で401。
 - `req.nextUrl.searchParams.get("status")`: クエリ`?status=`を取得。
-- `if (statusParam && !ITEM_STATUSES.includes(...)) return badRequest(...)`: 不正statusは400。
+- `isItemStatus(statusParam)`: ドメイン層の状態判定を使い、不正statusは400。
 - `await withUser(user.sub, async (tx) => {...})`: **RLS文脈で実行**(自分の行のみ)。
   - `tx.item.findMany({ where: { deletedAt: null, ...(status?{status}:{}) } })`: RLSで自分の行のみ。`deletedAt: null`＋status指定で絞り込む。
   - `categoryIdsByItem(tx, rows.map(r=>Number(r.id)))`: 各アイテムのカテゴリIDをまとめて取得（idはBigInt→Number）。
@@ -208,7 +191,7 @@ export async function POST(req: NextRequest) {
 
   let body: unknown;
   try { body = await req.json(); } catch { return badRequest("invalid JSON body"); }
-  const parsed = parseItemBody(body);
+  const parsed = parseItemApiBody(body);
   if (!parsed.ok) return badRequest(parsed.error);
   const v = parsed.value;
 
@@ -242,7 +225,7 @@ export async function POST(req: NextRequest) {
 ```
 **逐行解説**
 - `let body; try { body = await req.json() } catch { return badRequest(...) }`: リクエストボディをJSONとして読む。壊れていれば400。
-- `const parsed = parseItemBody(body); if (!parsed.ok) return badRequest(parsed.error)`: 検証。失敗で400。
+- `const parsed = parseItemApiBody(body); if (!parsed.ok) return badRequest(parsed.error)`: 検証。失敗で400。
 - `await withUser(user.sub, async (tx) => {...})`内:
   - `tx.user.upsert({ where:{id}, update:{}, create:{...} })`: **FK対策**。`items.user_id → users.id`のため、API専用クライアント(Web未ログイン)でも動くよう`users`行を先に確保（あれば何もしない）。
   - `tx.item.create({ data:{...} })`: アイテム挿入し作成行を取得（`purchasedAt`は`new Date()`で日付化）。
@@ -287,7 +270,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
 ```ts
 export async function PUT(req, ctx) {
-  /* getApiUser → parseId → req.json → parseItemBody */
+  /* getApiUser → parseId → req.json → parseItemApiBody */
   const result = await withUser(user.sub, async (tx) => {
     // RLSで他人の行は見えない。存在確認してから更新。
     const exists = await tx.item.findFirst({ where: { id: BigInt(id) }, select: { id: true } });
