@@ -1,12 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { withUser } from "@/db/client";
-import { toItem } from "@/db/serialize";
 import {
   isItemStatus,
   type ItemStatus,
 } from "@/features/items/domain/status";
 import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
+import { createApiItemUseCase } from "@/features/items/application/item-api-command-use-cases";
 import { loadApiItemsUseCase } from "@/features/items/application/item-api-query-use-cases";
+import { prismaItemApiCommandRepository } from "@/features/items/infrastructure/prisma-item-api-command-repository";
 import { prismaItemApiQueryRepository } from "@/features/items/infrastructure/prisma-item-api-query-repository";
 import { getApiUser, unauthorized, badRequest, dbErrorResponse } from "@/lib/auth/api";
 
@@ -14,6 +14,9 @@ export const dynamic = "force-dynamic";
 
 const itemApiQueryDependencies = Object.freeze({
   repository: prismaItemApiQueryRepository,
+});
+const itemApiCommandDependencies = Object.freeze({
+  repository: prismaItemApiCommandRepository,
 });
 
 // GET /api/v1/items?status=owned … 自分のアイテム一覧（RLS で自分の行のみ）。
@@ -54,38 +57,13 @@ export async function POST(req: NextRequest) {
   }
   const parsed = parseItemApiBody(body);
   if (!parsed.ok) return badRequest(parsed.error);
-  const v = parsed.value;
 
   try {
-    const created = await withUser(user.sub, async (tx) => {
-      // FK(items.user_id → users.id)のため users 行を保証してから挿入する。
-      await tx.user.upsert({
-        where: { id: user.sub },
-        update: {},
-        create: { id: user.sub, email: user.email, username: user.email.split("@")[0] },
-      });
-
-      const row = await tx.item.create({
-        data: {
-          userId: user.sub,
-          status: v.status,
-          name: v.name,
-          janCode: v.janCode,
-          quantity: v.quantity,
-          notes: v.notes,
-          actualPrice: v.actualPrice,
-          purchasedAt: v.purchasedAt ? new Date(v.purchasedAt) : null,
-        },
-      });
-
-      if (v.categoryIds.length > 0) {
-        await tx.itemCategory.createMany({
-          data: v.categoryIds.map((cid) => ({ itemId: row.id, categoryId: cid })),
-        });
-      }
-      return { ...toItem(row), category_ids: v.categoryIds };
+    const item = await createApiItemUseCase(itemApiCommandDependencies, {
+      actor: { userId: user.sub, email: user.email },
+      input: parsed.value,
     });
-    return NextResponse.json({ item: created }, { status: 201 });
+    return NextResponse.json({ item }, { status: 201 });
   } catch (e) {
     return dbErrorResponse(e);
   }

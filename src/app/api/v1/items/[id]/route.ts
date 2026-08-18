@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { withUser } from "@/db/client";
-import { toItem } from "@/db/serialize";
 import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
+import { updateApiItemUseCase } from "@/features/items/application/item-api-command-use-cases";
 import { loadApiItemUseCase } from "@/features/items/application/item-api-query-use-cases";
+import { prismaItemApiCommandRepository } from "@/features/items/infrastructure/prisma-item-api-command-repository";
 import { prismaItemApiQueryRepository } from "@/features/items/infrastructure/prisma-item-api-query-repository";
 import { deleteImage } from "@/lib/image";
 import { getApiUser, unauthorized, badRequest, jsonError, dbErrorResponse } from "@/lib/auth/api";
@@ -11,6 +12,9 @@ export const dynamic = "force-dynamic";
 
 const itemApiQueryDependencies = Object.freeze({
   repository: prismaItemApiQueryRepository,
+});
+const itemApiCommandDependencies = Object.freeze({
+  repository: prismaItemApiCommandRepository,
 });
 
 function parseId(raw: string): number | null {
@@ -52,38 +56,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
   const parsed = parseItemApiBody(body);
   if (!parsed.ok) return badRequest(parsed.error);
-  const v = parsed.value;
 
   try {
-    const result = await withUser(user.sub, async (tx) => {
-      // RLS で他人の行は見えない。存在確認してから更新する。
-      const exists = await tx.item.findFirst({ where: { id: BigInt(id) }, select: { id: true } });
-      if (!exists) return null;
-
-      const row = await tx.item.update({
-        where: { id: BigInt(id) },
-        data: {
-          status: v.status,
-          name: v.name,
-          janCode: v.janCode,
-          quantity: v.quantity,
-          notes: v.notes,
-          actualPrice: v.actualPrice,
-          purchasedAt: v.purchasedAt ? new Date(v.purchasedAt) : null,
-        },
-      });
-
-      // カテゴリは置換方式（現行を削除して入れ直す）。
-      await tx.itemCategory.deleteMany({ where: { itemId: BigInt(id) } });
-      if (v.categoryIds.length > 0) {
-        await tx.itemCategory.createMany({
-          data: v.categoryIds.map((cid) => ({ itemId: BigInt(id), categoryId: cid })),
-        });
-      }
-      return { ...toItem(row), category_ids: v.categoryIds };
+    const item = await updateApiItemUseCase(itemApiCommandDependencies, {
+      userId: user.sub,
+      itemId: id,
+      input: parsed.value,
     });
-    if (!result) return jsonError(404, "not found");
-    return NextResponse.json({ item: result });
+    if (!item) return jsonError(404, "not found");
+    return NextResponse.json({ item });
   } catch (e) {
     return dbErrorResponse(e);
   }

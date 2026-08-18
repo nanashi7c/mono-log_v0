@@ -1,4 +1,4 @@
-import type { ItemApiData } from "@/features/items/application/item-api-query-data";
+import type { ItemApiData } from "@/features/items/application/item-api-data";
 import type { ItemStatus } from "@/features/items/domain/status";
 
 export interface ItemApiQueryRepository {

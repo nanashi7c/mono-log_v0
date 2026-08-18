@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  createApiItemUseCase: vi.fn(),
   loadApiItemsUseCase: vi.fn(),
   getApiUser: vi.fn(),
   unauthorized: vi.fn(() =>
@@ -15,16 +16,21 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+vi.mock("@/features/items/application/item-api-command-use-cases", () => ({
+  createApiItemUseCase: mocks.createApiItemUseCase,
+}));
+
 vi.mock("@/features/items/application/item-api-query-use-cases", () => ({
   loadApiItemsUseCase: mocks.loadApiItemsUseCase,
+}));
+
+vi.mock("@/features/items/infrastructure/prisma-item-api-command-repository", () => ({
+  prismaItemApiCommandRepository: {},
 }));
 
 vi.mock("@/features/items/infrastructure/prisma-item-api-query-repository", () => ({
   prismaItemApiQueryRepository: {},
 }));
-
-vi.mock("@/db/client", () => ({ withUser: vi.fn() }));
-vi.mock("@/db/serialize", () => ({ toItem: vi.fn() }));
 
 vi.mock("@/lib/auth/api", () => ({
   getApiUser: mocks.getApiUser,
@@ -33,16 +39,98 @@ vi.mock("@/lib/auth/api", () => ({
   dbErrorResponse: mocks.dbErrorResponse,
 }));
 
-import { GET } from "@/app/api/v1/items/route";
+import { GET, POST } from "@/app/api/v1/items/route";
 
 const items = Object.freeze([
   Object.freeze({ id: 1, name: "Camera", category_ids: Object.freeze([3]) }),
 ]);
+const createdItem = Object.freeze({
+  id: 2,
+  name: "New camera",
+  category_ids: Object.freeze([3]),
+});
+
+function postRequest(body: string): NextRequest {
+  return new NextRequest("http://localhost/api/v1/items", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getApiUser.mockResolvedValue({ sub: "user-1", email: "user@example.com" });
   mocks.loadApiItemsUseCase.mockResolvedValue(items);
+  mocks.createApiItemUseCase.mockResolvedValue(createdItem);
+});
+
+describe("POST /api/v1/items", () => {
+  it("returns 401 when authentication fails", async () => {
+    mocks.getApiUser.mockResolvedValue(null);
+
+    const response = await POST(postRequest('{"name":"New camera"}'));
+
+    expect(response.status).toBe(401);
+    expect(mocks.createApiItemUseCase).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for malformed JSON", async () => {
+    const response = await POST(postRequest("{"));
+
+    expect(response.status).toBe(400);
+    expect(mocks.badRequest).toHaveBeenCalledWith("invalid JSON body");
+    expect(mocks.createApiItemUseCase).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when body validation fails", async () => {
+    const response = await POST(postRequest("{}"));
+
+    expect(response.status).toBe(400);
+    expect(mocks.badRequest).toHaveBeenCalledWith("name is required");
+    expect(mocks.createApiItemUseCase).not.toHaveBeenCalled();
+  });
+
+  it("creates an item and returns the public response envelope", async () => {
+    const response = await POST(
+      postRequest(
+        JSON.stringify({
+          name: " New camera ",
+          status: "owned",
+          category_ids: [3],
+        }),
+      ),
+    );
+
+    expect(mocks.createApiItemUseCase).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        actor: { userId: "user-1", email: "user@example.com" },
+        input: {
+          status: "owned",
+          name: "New camera",
+          janCode: null,
+          quantity: 1,
+          notes: null,
+          actualPrice: null,
+          purchasedAt: null,
+          categoryIds: [3],
+        },
+      },
+    );
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({ item: createdItem });
+  });
+
+  it("converts command failures to the shared database response", async () => {
+    const error = new Error("database failure");
+    mocks.createApiItemUseCase.mockRejectedValue(error);
+
+    const response = await POST(postRequest('{"name":"New camera"}'));
+
+    expect(response.status).toBe(500);
+    expect(mocks.dbErrorResponse).toHaveBeenCalledWith(error);
+  });
 });
 
 describe("GET /api/v1/items", () => {
