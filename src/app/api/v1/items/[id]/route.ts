@@ -1,9 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { withUser } from "@/db/client";
 import { toItem } from "@/db/serialize";
+import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
 import { deleteImage } from "@/lib/image";
 import { getApiUser, unauthorized, badRequest, jsonError, dbErrorResponse } from "@/lib/auth/api";
-import { categoryIdsByItem, parseItemBody } from "@/lib/api/items";
+import { categoryIdsByItem } from "@/lib/api/items";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +47,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   } catch {
     return badRequest("invalid JSON body");
   }
-  const parsed = parseItemBody(body);
+  const parsed = parseItemApiBody(body);
   if (!parsed.ok) return badRequest(parsed.error);
   const v = parsed.value;
 

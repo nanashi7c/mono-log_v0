@@ -5,8 +5,9 @@ import {
   isItemStatus,
   type ItemStatus,
 } from "@/features/items/domain/status";
+import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
 import { getApiUser, unauthorized, badRequest, dbErrorResponse } from "@/lib/auth/api";
-import { categoryIdsByItem, parseItemBody } from "@/lib/api/items";
+import { categoryIdsByItem } from "@/lib/api/items";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest) {
   } catch {
     return badRequest("invalid JSON body");
   }
-  const parsed = parseItemBody(body);
+  const parsed = parseItemApiBody(body);
   if (!parsed.ok) return badRequest(parsed.error);
   const v = parsed.value;
 
