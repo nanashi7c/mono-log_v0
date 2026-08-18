@@ -112,6 +112,7 @@ export function parseItemApiBody(body: unknown):
 - `ItemApiCommandInput`: application層に置くAPI更新専用の読み取り専用型です。フォーム入力用の型と混同しません。
 - `status`: 未指定は`owned`。指定時はドメイン層の`isItemStatus`で検証します。
 - `quantity`、`actual_price`、`category_ids`: 共通の数値検証関数でDB上限を含めて検証します。
+- `purchased_at`: 共通の日付検証関数で`YYYY-MM-DD`形式と暦上の実在日を検証します。日時、存在しない日付、非文字列はrouteから400で返します。
 - `category_ids`: 配列の各要素を正の整数へ変換します。
 
 DBへ依存する一覧・詳細検索は、入力変換と分けて専用repositoryへ置きます。

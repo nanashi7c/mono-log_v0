@@ -122,6 +122,33 @@ describe("parseItemApiBody", () => {
     });
   });
 
+  it.each(["2026-01-01", "2024-02-29"])(
+    "実在するpurchased_at %sを受け付ける",
+    (purchasedAt) => {
+      expect(
+        parseItemApiBody({ name: "item", purchased_at: purchasedAt }),
+      ).toMatchObject({
+        ok: true,
+        value: { purchasedAt },
+      });
+    },
+  );
+
+  it.each([
+    "2023-02-29",
+    "2026-6-1",
+    "2026-01-01T00:00:00Z",
+    20260101,
+    {},
+  ])("不正なpurchased_at %jを拒否する", (purchasedAt) => {
+    expect(
+      parseItemApiBody({ name: "item", purchased_at: purchasedAt }),
+    ).toEqual({
+      ok: false,
+      error: "purchased_at must be YYYY-MM-DD or null",
+    });
+  });
+
   it("category_idsの重複を含む現行の並びを維持する", () => {
     expect(parseItemApiBody({ name: "item", category_ids: [3, "3", 5] })).toMatchObject({
       ok: true,
