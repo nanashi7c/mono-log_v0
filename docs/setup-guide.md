@@ -433,7 +433,7 @@ terraform apply    # yes で作成。RDS作成に数分かかる
 - **storage.tf**: 画像用S3（全公開ブロック+SSE）+ SSM（s3/bucket）
 - **database.tf**: RDS（`db.t4g.micro`, PG16, private, 20GB）+ マスタ/アプリ両ロールのパスワードをSSMに（`db/password`, `db/app_password`）+ 接続情報SSM（host/port/name/username）
 - **ecr.tf**: イメージ保管庫 + 直近10個保持のライフサイクル
-- **compute.tf**: EC2用IAMロール（SSM読取・ECR読取・S3 RW・CognitoAdminGetUser）+ EC2（ARM, Docker自動導入, 起動時にSSMから設定取得して`docker run`）+ ルート30GB
+- **compute.tf**: EC2用IAMロール（SSM読取・ECR読取・S3 RW）+ EC2（ARM, Docker自動導入, 起動時にSSMから設定取得して`docker run`）+ ルート30GB
 - **cdn.tf**: CloudFront（HTTPS強制・キャッシュ無効・全ヘッダ転送、オリジン=EC2）
 
 > この時点ではEC2にイメージがまだ無いため、アプリは未起動（systemdが30秒ごとに再試行）です。次の11〜12章で投入します。

@@ -225,7 +225,9 @@ src/
     api/export/route.ts   JSON ダウンロード（Cookie 認証）
     api/v1/               外部向け REST API（Bearer 認証）items/categories/export
   components/             UI（item-card / item-form / nav-bar / filter-bar）
+  features/home/          トップ画面のユーザー名・件数Query
   features/items/         itemsのdomain/application/infrastructure/adapters
+  features/users/         マイページのプロフィールQuery
   db/
     client.ts             Prisma Client（遅延生成）＋ withUser（RLS コンテキスト実行）
     serialize.ts          Prisma 行（BigInt/Decimal/Date）→ アプリ型（number/文字列）変換
@@ -246,7 +248,7 @@ infra/                    Terraform（VPC/Cognito/RDS/S3/ECR/EC2/CloudFront/SSM/
 - 認証は **Cognito**。ID トークンは **JWKS** で署名検証し、トークンは httpOnly Cookie に保存。失効時は middleware が自動リフレッシュ。
 - 画像は**非公開 S3**。表示は署名付き GET、送信は形式・10MB上限・5分期限を持つ署名付き POST を使う。画像本体はアプリサーバーを経由しない。
 - 画像選択時にユーザー専用の `pending_item_image_uploads` を作り、アイテム保存とpending消費を同じDBトランザクションで確定する。DB保存に失敗した画像はpendingのまま残り、期限後の次回アップロード準備時にS3から削除する。
-- 本番 DB 接続は **SSL 必須**（`sslmode=require`）。EC2 は IAM ロールで最小権限（SSM 読取 / S3 オブジェクト RW / Cognito `AdminGetUser`）。機密は SSM Parameter Store（SecureString）で管理し、コードに秘密を書かない。
+- 本番 DB 接続は **SSL 必須**（`sslmode=require`）。EC2 は IAM ロールで最小権限（SSM 読取 / S3 オブジェクト RW）。機密は SSM Parameter Store（SecureString）で管理し、コードに秘密を書かない。
 
 ## 既知の制限
 

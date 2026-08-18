@@ -1,25 +1,24 @@
 import Link from "next/link";
+import { loadHomeOverviewUseCase } from "@/features/home/application/home-overview-query-use-cases";
+import { prismaHomeOverviewQueryRepository } from "@/features/home/infrastructure/prisma-home-overview-query-repository";
 import { getCurrentUser } from "@/lib/auth/session";
-import { withUser } from "@/db/client";
 import styles from "./page.module.css";
 
 export const dynamic = "force-dynamic";
+
+const homeOverviewQueryDependencies = {
+  repository: prismaHomeOverviewQueryRepository,
+};
 
 export default async function LandingPage() {
   const user = await getCurrentUser();
   if (!user) return <UnauthenticatedLanding />;
 
-  // Counts for the four navigation cards.
-  const { owned, planned, listed } = await withUser(user.sub, async (tx) => {
-    const owned = await tx.item.count({
-      where: { status: { in: ["owned", "listed"] }, deletedAt: null },
-    });
-    const planned = await tx.item.count({ where: { status: "planned", deletedAt: null } });
-    const listed = await tx.item.count({ where: { status: "listed", deletedAt: null } });
-    return { owned, planned, listed };
-  });
-
-  const username = user.email?.split("@")[0] ?? "";
+  const overview = await loadHomeOverviewUseCase(
+    homeOverviewQueryDependencies,
+    { userId: user.sub },
+  );
+  const username = overview.username ?? user.email.split("@")[0];
 
   return (
     <div>
@@ -35,21 +34,21 @@ export default async function LandingPage() {
           href="/items"
           label="OWNED"
           title="所有物"
-          count={owned}
+          count={overview.owned}
           desc="手元にある物・出品中の物を一覧表示"
         />
         <NavCard
           href="/items/planned"
           label="PLANNED"
           title="購入予定"
-          count={planned}
+          count={overview.planned}
           desc="買おうとしている物を管理"
         />
         <NavCard
           href="/items/selling"
           label="LISTED"
           title="出品中"
-          count={listed}
+          count={overview.listed}
           desc="出品中の物と損益を確認"
         />
         <NavCard href="/dashboard" label="STATS" title="ダッシュボード" desc="保有資産・カテゴリ別の集計" />

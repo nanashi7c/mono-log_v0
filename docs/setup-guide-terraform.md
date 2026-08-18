@@ -686,11 +686,6 @@ data "aws_iam_policy_document" "app" {
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = ["${aws_s3_bucket.item_images.arn}/*"]
   }
-  statement {
-    sid       = "CognitoAdminGetUser"
-    actions   = ["cognito-idp:AdminGetUser"]
-    resources = [aws_cognito_user_pool.main.arn]
-  }
 }
 resource "aws_iam_role_policy" "app" {
   name   = "${var.project_name}-app"
@@ -700,8 +695,7 @@ resource "aws_iam_role_policy" "app" {
 ```
 **逐行解説**
 - アプリ機能に要る権限。
-- 文1: S3の画像オブジェクトの読み/書き/削除を、**そのバケットのオブジェクト(`/*`)に限定**。
-- 文2: 登録日時表示に使う`cognito-idp:AdminGetUser`を、**自分のプールARNに限定**。
+- S3の画像オブジェクトの読み/書き/削除を、**そのバケットのオブジェクト(`/*`)に限定**。
 - `aws_iam_role_policy "app"`でロールに付与。
 
 ```hcl

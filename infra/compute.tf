@@ -66,11 +66,6 @@ data "aws_iam_policy_document" "app" {
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = ["${aws_s3_bucket.item_images.arn}/*"]
   }
-  statement {
-    sid       = "CognitoAdminGetUser"
-    actions   = ["cognito-idp:AdminGetUser"]
-    resources = [aws_cognito_user_pool.main.arn]
-  }
 }
 
 resource "aws_iam_role_policy" "app" {
