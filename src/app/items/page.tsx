@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import FilterBar from "@/components/filter-bar";
 import ItemCard from "@/components/item-card";
+import OwnedItemsToolbar from "@/components/owned-items-toolbar";
 import { parseOwnedItemsFilter } from "@/features/items/adapters/parse-owned-items-filter";
 import { loadOwnedItemsUseCase } from "@/features/items/application/item-list-query-use-cases";
 import { prismaItemListQueryRepository } from "@/features/items/infrastructure/prisma-item-list-query-repository";
@@ -39,17 +39,7 @@ export default async function OwnedItemsPage({
 
   return (
     <div className={styles.container}>
-      <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>所有物</h1>
-          <p className={styles.count}>{list.length} 件</p>
-        </div>
-        <Link href="/items/new" className={styles.cta}>
-          + 追加
-        </Link>
-      </div>
-
-      <FilterBar categories={categoryOptions} />
+      <OwnedItemsToolbar count={list.length} categories={categoryOptions} />
 
       {list.length === 0 ? (
         <div className={styles.empty}>
