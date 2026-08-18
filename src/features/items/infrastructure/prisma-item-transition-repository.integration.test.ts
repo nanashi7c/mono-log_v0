@@ -36,6 +36,20 @@ const repository = createPrismaItemTransitionRepository(
     }),
 );
 const testUserIds = new Set<string>();
+const LISTING_DRAFT_SELECT = {
+  shippingId: true,
+  platformId: true,
+  quantity: true,
+  sellingPrice: true,
+  packagingCost: true,
+  workTimeHours: true,
+  laborRate: true,
+  sellingFee: true,
+  workTimeCost: true,
+  operatingBenefit: true,
+  ordinaryProfit: true,
+  isListing: true,
+} as const;
 
 async function createTestUser(label: string): Promise<string> {
   const userId = randomUUID();
@@ -105,6 +119,26 @@ describe("prismaItemTransitionRepository", () => {
     expect(listed).toMatchObject({ status: "listed" });
     expect(listed?.listing).not.toBeNull();
 
+    await admin.listing.update({
+      where: { itemId: BigInt(itemId) },
+      data: {
+        quantity: 2,
+        sellingPrice: 15_000,
+        packagingCost: 300,
+        workTimeHours: 1.25,
+        laborRate: 1_200,
+        sellingFee: 1_500,
+        workTimeCost: 1_500,
+        operatingBenefit: 11_700,
+        ordinaryProfit: 11_700,
+        isListing: true,
+      },
+    });
+    const listingDraft = await admin.listing.findUnique({
+      where: { itemId: BigInt(itemId) },
+      select: LISTING_DRAFT_SELECT,
+    });
+
     const invalidResult = await repository.transition(
       userId,
       itemId,
@@ -121,9 +155,15 @@ describe("prismaItemTransitionRepository", () => {
     );
     const unlisted = await admin.item.findUnique({
       where: { id: BigInt(itemId) },
-      include: { listing: true },
+      select: {
+        status: true,
+        listing: {
+          select: LISTING_DRAFT_SELECT,
+        },
+      },
     });
-    expect(unlisted).toMatchObject({ status: "owned", listing: null });
+    expect(unlisted?.status).toBe("owned");
+    expect(unlisted?.listing).toEqual(listingDraft);
 
     await repository.transition(
       userId,
@@ -143,6 +183,11 @@ describe("prismaItemTransitionRepository", () => {
       getItemTransitionPlan("start_listing"),
       null,
     );
+    const relistedDraft = await admin.listing.findUnique({
+      where: { itemId: BigInt(itemId) },
+      select: LISTING_DRAFT_SELECT,
+    });
+    expect(relistedDraft).toEqual(listingDraft);
     await repository.transition(
       userId,
       itemId,

@@ -7,7 +7,7 @@ export type ItemTransitionAction =
   | "mark_sold"
   | "cancel_listing";
 
-export type ItemListingChange = "keep" | "ensure" | "remove";
+export type ItemListingChange = "keep" | "ensure";
 
 export type ItemTransitionPlan = Readonly<{
   from: ItemStatus;
@@ -48,7 +48,7 @@ const ITEM_TRANSITION_PLANS = Object.freeze({
   cancel_listing: frozenPlan({
     from: "listed",
     to: "owned",
-    listingChange: "remove",
+    listingChange: "keep",
     markDeleted: false,
   }),
 } satisfies Readonly<Record<ItemTransitionAction, ItemTransitionPlan>>);

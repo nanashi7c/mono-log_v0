@@ -50,7 +50,7 @@ const cases: readonly Readonly<{
     expected: {
       from: "listed",
       to: "owned",
-      listingChange: "remove",
+      listingChange: "keep",
       markDeleted: false,
     },
   },

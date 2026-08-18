@@ -136,7 +136,6 @@ export async function syncItemListing(
   input: ItemWriteInput,
 ): Promise<void> {
   if (input.status !== "listed") {
-    await tx.listing.deleteMany({ where: { itemId: BigInt(itemId) } });
     return;
   }
 
