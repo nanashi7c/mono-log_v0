@@ -6,7 +6,7 @@ import type { Category } from "@/types/item";
 import styles from "./filter-bar.module.css";
 
 type Props = {
-  categories: Pick<Category, "id" | "name" | "color">[];
+  categories: readonly Readonly<Pick<Category, "id" | "name" | "color">>[];
   // Search placeholder differs per list; let callers override.
   placeholder?: string;
 };

@@ -1,13 +1,16 @@
 import { notFound, redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/auth/session";
-import { withUser } from "@/db/client";
-import { toItem, toPlan, toListing } from "@/db/serialize";
-import { signedImageUrl } from "@/lib/image";
 import ItemForm from "@/components/item-form";
+import { loadItemEditFormUseCase } from "@/features/items/application/item-form-query-use-cases";
+import { prismaItemFormQueryRepository } from "@/features/items/infrastructure/prisma-item-form-query-repository";
+import { getCurrentUser } from "@/lib/auth/session";
+import { signedImageUrl } from "@/lib/image";
 import { deleteItem, updateItem } from "../../actions";
-import type { Item, Listing, Plan } from "@/types/item";
 
 export const dynamic = "force-dynamic";
+
+const itemFormQueryDependencies = {
+  repository: prismaItemFormQueryRepository,
+};
 
 export default async function EditItemPage({
   params,
@@ -25,68 +28,9 @@ export default async function EditItemPage({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const result = await withUser(user.sub, async (tx) => {
-    const itemRow = await tx.item.findFirst({ where: { id: BigInt(itemId) } });
-    if (!itemRow) return null;
-    const item: Item = toItem(itemRow);
-
-    const planRow = await tx.plan.findUnique({ where: { itemId: BigInt(itemId) } });
-    const plan: Plan | null = planRow ? toPlan(planRow) : null;
-
-    const listingRow = await tx.listing.findUnique({ where: { itemId: BigInt(itemId) } });
-    const listing: Listing | null = listingRow ? toListing(listingRow) : null;
-
-    const links = await tx.itemCategory.findMany({
-      where: { itemId: BigInt(itemId) },
-      select: { categoryId: true },
-    });
-    const selectedCategoryIds = links.map((r) => r.categoryId);
-
-    const cats = await tx.category.findMany({
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, color: true },
-    });
-    const plats = await tx.platform.findMany({
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    });
-    const svcs = (
-      await tx.service.findMany({
-        orderBy: { shippingService: "asc" },
-        select: { id: true, shippingService: true },
-      })
-    ).map((s) => ({ id: s.id, shipping_service: s.shippingService }));
-    const szs = (
-      await tx.size.findMany({
-        orderBy: { shippingSize: "asc" },
-        select: { id: true, shippingSize: true },
-      })
-    ).map((s) => ({ id: s.id, shipping_size: s.shippingSize }));
-
-    // listings の shipping_id 参照からフォーム初期値の service/size を解決する。
-    let initialServiceId: number | null = null;
-    let initialSizeId: number | null = null;
-    if (listing?.shipping_id != null) {
-      const sh = await tx.shipping.findUnique({
-        where: { id: BigInt(listing.shipping_id) },
-        select: { shippingServiceId: true, shippingSizeId: true },
-      });
-      initialServiceId = sh?.shippingServiceId ?? null;
-      initialSizeId = sh?.shippingSizeId ?? null;
-    }
-
-    return {
-      item,
-      plan,
-      listing,
-      selectedCategoryIds,
-      cats,
-      plats,
-      svcs,
-      szs,
-      initialServiceId,
-      initialSizeId,
-    };
+  const result = await loadItemEditFormUseCase(itemFormQueryDependencies, {
+    userId: user.sub,
+    itemId,
   });
 
   if (!result) notFound();
@@ -103,11 +47,11 @@ export default async function EditItemPage({
       plan={result.plan}
       listing={result.listing}
       imageUrl={imageUrl}
-      categories={result.cats}
+      categories={result.categories}
       selectedCategoryIds={result.selectedCategoryIds}
-      platforms={result.plats}
-      services={result.svcs}
-      sizes={result.szs}
+      platforms={result.platforms}
+      services={result.services}
+      sizes={result.sizes}
       initialServiceId={result.initialServiceId}
       initialSizeId={result.initialSizeId}
       action={updateAction}
