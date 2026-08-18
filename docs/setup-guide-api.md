@@ -114,22 +114,21 @@ export function parseItemApiBody(body: unknown):
 - `quantity`、`actual_price`、`category_ids`: 共通の数値検証関数でDB上限を含めて検証します。
 - `category_ids`: 配列の各要素を正の整数へ変換します。
 
-DBへ依存するカテゴリ参照は、入力変換と分けてroute間で共有します。
+DBへ依存する一覧・詳細検索は、入力変換と分けて専用repositoryへ置きます。
 
-`src/lib/api/items.ts`:
+`src/features/items/application/item-api-query-ports.ts`:
 
 ```ts
-import type { Tx } from "@/db/client";
+import type { ItemApiData } from "@/features/items/application/item-api-query-data";
+import type { ItemStatus } from "@/features/items/domain/status";
 
-export async function categoryIdsByItem(
-  tx: Tx,
-  ids: readonly number[],
-): Promise<Map<number, number[]>> {
-  // item_id(number)はBigIntにして一括検索し、結果をitem_idごとにまとめる。
+export interface ItemApiQueryRepository {
+  findMany(userId: string, status: ItemStatus | null): Promise<readonly ItemApiData[]>;
+  findById(userId: string, itemId: number): Promise<ItemApiData | null>;
 }
 ```
 
-`categoryIdsByItem(tx, ids)`は、アイテムID群に紐づくカテゴリIDを一括取得し、`Map<itemId, categoryId[]>`で返します。入力変換にはDB依存を持ち込まず、後続のrepository分離までこのファイルをrouteのDB参照ヘルパとして扱います。
+`prisma-item-api-query-repository.ts`がRLSトランザクション、Prisma検索、カテゴリIDの一括取得、API形式への変換を担当します。routeは認証・入力検証・HTTP応答だけを担当し、use caseを介してrepositoryを呼びます。
 
 ---
 
@@ -140,10 +139,15 @@ import { withUser } from "@/db/client";
 import { toItem } from "@/db/serialize";
 import { getApiUser, unauthorized, badRequest, dbErrorResponse } from "@/lib/auth/api";
 import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
+import { loadApiItemsUseCase } from "@/features/items/application/item-api-query-use-cases";
 import { isItemStatus, type ItemStatus } from "@/features/items/domain/status";
-import { categoryIdsByItem } from "@/lib/api/items";
+import { prismaItemApiQueryRepository } from "@/features/items/infrastructure/prisma-item-api-query-repository";
 
 export const dynamic = "force-dynamic";
+
+const itemApiQueryDependencies = Object.freeze({
+  repository: prismaItemApiQueryRepository,
+});
 
 export async function GET(req: NextRequest) {
   const user = await getApiUser(req);
@@ -159,14 +163,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const result = await withUser(user.sub, async (tx) => {
-      const rows = await tx.item.findMany({
-        where: { deletedAt: null, ...(status ? { status } : {}) },
-      });
-      const linkMap = await categoryIdsByItem(tx, rows.map((r) => Number(r.id)));
-      return rows.map((r) => ({ ...toItem(r), category_ids: linkMap.get(Number(r.id)) ?? [] }));
+    const items = await loadApiItemsUseCase(itemApiQueryDependencies, {
+      userId: user.sub,
+      status,
     });
-    return NextResponse.json({ items: result });
+    return NextResponse.json({ items });
   } catch (e) {
     return dbErrorResponse(e);
   }
@@ -177,11 +178,8 @@ export async function GET(req: NextRequest) {
 - `const user = await getApiUser(req); if (!user) return unauthorized();`: **全ハンドラ共通の入口**。Bearer検証、失敗で401。
 - `req.nextUrl.searchParams.get("status")`: クエリ`?status=`を取得。
 - `isItemStatus(statusParam)`: ドメイン層の状態判定を使い、不正statusは400。
-- `await withUser(user.sub, async (tx) => {...})`: **RLS文脈で実行**(自分の行のみ)。
-  - `tx.item.findMany({ where: { deletedAt: null, ...(status?{status}:{}) } })`: RLSで自分の行のみ。`deletedAt: null`＋status指定で絞り込む。
-  - `categoryIdsByItem(tx, rows.map(r=>Number(r.id)))`: 各アイテムのカテゴリIDをまとめて取得（idはBigInt→Number）。
-  - `rows.map((r) => ({ ...toItem(r), category_ids: linkMap.get(Number(r.id)) ?? [] }))`: `toItem`でPrisma行をAPI形(snake_case・BigInt/Decimal→number)へ変換し、`category_ids`を付与。
-- `return NextResponse.json({ items: result })`: 一覧をJSONで返す。
+- `loadApiItemsUseCase(...)`: 認証済みユーザーIDとstatusをquery境界へ渡す。RLS、`deletedAt: null`、カテゴリIDの一括取得、API形式への変換はrepository内で行う。
+- `return NextResponse.json({ items })`: 一覧をJSONで返す。
 - `catch (e) { return dbErrorResponse(e) }`: DB例外を400/500に振り分け。
 
 ```ts
@@ -251,22 +249,20 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const id = parseId((await ctx.params).id);
   if (id == null) return badRequest("invalid id");
   try {
-    const result = await withUser(user.sub, async (tx) => {
-      const row = await tx.item.findFirst({ where: { id: BigInt(id) } });
-      if (!row) return null;
-      const linkMap = await categoryIdsByItem(tx, [id]);
-      return { ...toItem(row), category_ids: linkMap.get(id) ?? [] };
+    const item = await loadApiItemUseCase(itemApiQueryDependencies, {
+      userId: user.sub,
+      itemId: id,
     });
-    if (!result) return jsonError(404, "not found");
-    return NextResponse.json({ item: result });
+    if (!item) return jsonError(404, "not found");
+    return NextResponse.json({ item });
   } catch (e) { return dbErrorResponse(e); }
 }
 ```
 **逐行解説**
 - 第2引数`ctx: { params: Promise<{ id: string }> }`: 動的セグメント。Next 15では`params`がPromiseなので`await ctx.params`。
 - `const id = parseId((await ctx.params).id)`: idを整数化。不正なら400。
-- `tx.item.findFirst({ where: { id: BigInt(id) } })`: 1件取得。idはBigInt。RLSで他人の行は見えないので、無ければ`null`→**404**。
-- 取得できれば`toItem`＋`category_ids`で返す。
+- `loadApiItemUseCase(...)`: 1件取得をquery repositoryへ委譲。RLSで他人の行は見えないので、無ければ`null`→**404**。
+- repositoryが`toItem`変換と`category_ids`付与を行い、routeは`{ item }`で返す。
 
 ```ts
 export async function PUT(req, ctx) {
@@ -377,25 +373,17 @@ export async function GET(req: NextRequest) {
   const user = await getApiUser(req);
   if (!user) return unauthorized();
   try {
-    const { exportedCategories, exportedItems } = await withUser(user.sub, async (tx) => {
-      const catRows = await tx.category.findMany({ where: { userId: user.sub } });
-      const itemRows = await tx.item.findMany();
-      const linkMap = await categoryIdsByItem(tx, itemRows.map((r) => Number(r.id)));
-      return {
-        exportedCategories: catRows.map(toCategory),
-        exportedItems: itemRows.map((r) => ({ ...toItem(r), category_ids: linkMap.get(Number(r.id)) ?? [] })),
-      };
+    const backup = await exportItemsUseCase(itemExportDependencies, {
+      userId: user.sub,
     });
-    const payload = { version: 1, exported_at: new Date().toISOString(), categories: exportedCategories, items: exportedItems };
-    return NextResponse.json(payload);
+    return NextResponse.json(backup);
   } catch (e) { return dbErrorResponse(e); }
 }
 ```
 **逐行解説**
-- `catRows`: `where(eq(categories.userId, user.sub))`で**自作カテゴリのみ**(プリセットは取り込み先に既存のため除外)。
-- `itemRows`: 自分の全アイテム(RLS)。
-- `linkMap`/`map(...)`: 各アイテムに`category_ids`を付与。
-- `payload`: `version`/`exported_at`(ISO時刻)/`categories`/`items`をまとめて返す。
+- `exportItemsUseCase(...)`: バックアップ対象の取得と`version`/`exported_at`の組み立てをapplication層へ委譲する。
+- `prismaItemExportRepository`: RLS下で自作カテゴリと全アイテムを読み、各アイテムに`category_ids`を付与する。
+- routeはBearer認証とHTTP応答だけを担当する。
 
 ---
 
