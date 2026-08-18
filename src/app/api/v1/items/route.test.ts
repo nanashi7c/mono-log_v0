@@ -94,6 +94,18 @@ describe("POST /api/v1/items", () => {
     expect(mocks.createApiItemUseCase).not.toHaveBeenCalled();
   });
 
+  it("returns 400 for an invalid purchased_at", async () => {
+    const response = await POST(
+      postRequest('{"name":"New camera","purchased_at":"2026-02-30"}'),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.badRequest).toHaveBeenCalledWith(
+      "purchased_at must be YYYY-MM-DD or null",
+    );
+    expect(mocks.createApiItemUseCase).not.toHaveBeenCalled();
+  });
+
   it("creates an item and returns the public response envelope", async () => {
     const response = await POST(
       postRequest(

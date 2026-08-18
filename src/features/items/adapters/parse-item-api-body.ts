@@ -4,6 +4,7 @@ import {
 } from "@/features/items/domain/status";
 import type { ItemApiCommandInput } from "@/features/items/application/item-api-command-input";
 import { parseActualPrice } from "@/lib/validation/actual-price";
+import { parseOptionalDateOnly } from "@/lib/validation/date-only";
 import {
   INTEGER_MAX,
   parseOptionalInteger,
@@ -49,6 +50,11 @@ export function parseItemApiBody(body: unknown): ParseItemApiBodyResult {
   const actualPrice = parseActualPrice(input.actual_price);
   if (!actualPrice.ok) return { ok: false, error: actualPrice.error };
 
+  const purchasedAt = parseOptionalDateOnly(input.purchased_at, {
+    label: "purchased_at",
+  });
+  if (!purchasedAt.ok) return purchasedAt;
+
   const categoryIds: number[] = [];
   if (input.category_ids !== undefined) {
     if (!Array.isArray(input.category_ids)) {
@@ -74,7 +80,7 @@ export function parseItemApiBody(body: unknown): ParseItemApiBodyResult {
       quantity,
       notes: stringOrNull(input.notes),
       actualPrice: actualPrice.value,
-      purchasedAt: stringOrNull(input.purchased_at),
+      purchasedAt: purchasedAt.value,
       categoryIds,
     },
   };

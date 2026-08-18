@@ -117,6 +117,7 @@ curl -s -X POST "$BASE/items" \
 レスポンス `201`: `{ "item": { ... } }`
 
 `category_ids`に指定できるのは、プリセットカテゴリまたは認証ユーザー自身が作成したカテゴリだけです。存在しないIDや他ユーザーの非公開カテゴリIDを含む場合は、存在・所有者を区別せず`400 { "error": "invalid category_ids" }`を返し、商品は作成しません。
+`purchased_at`は`YYYY-MM-DD`形式の実在する日付、`null`、空文字だけを受け付けます。日時形式や存在しない日付は`400 { "error": "purchased_at must be YYYY-MM-DD or null" }`となります。
 過去のデータに利用できないカテゴリとの関連が残っていても、そのIDはGETレスポンスへ含めません。
 
 ### GET /items/{id}

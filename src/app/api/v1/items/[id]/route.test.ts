@@ -177,6 +177,19 @@ describe("PUT /api/v1/items/:id", () => {
     expect(mocks.updateApiItemUseCase).not.toHaveBeenCalled();
   });
 
+  it("returns 400 for an invalid purchased_at", async () => {
+    const response = await PUT(
+      putRequest('{"name":"Updated camera","purchased_at":"2026-02-30"}'),
+      context("1"),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.badRequest).toHaveBeenCalledWith(
+      "purchased_at must be YYYY-MM-DD or null",
+    );
+    expect(mocks.updateApiItemUseCase).not.toHaveBeenCalled();
+  });
+
   it("updates an item and returns the public response envelope", async () => {
     const response = await PUT(
       putRequest(
