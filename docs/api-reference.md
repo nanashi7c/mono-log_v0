@@ -55,7 +55,7 @@ curl -s "$BASE/items" -H "Authorization: Bearer $TOKEN"
 | POST | `/items` | アイテム作成 |
 | GET | `/items/{id}` | アイテム取得 |
 | PUT | `/items/{id}` | アイテム更新 |
-| DELETE | `/items/{id}` | アイテム削除（画像も S3 から削除） |
+| DELETE | `/items/{id}` | アイテム削除（画像は削除後に S3 から後処理） |
 | GET | `/categories` | カテゴリ一覧（プリセット＋自分） |
 | POST | `/categories` | カテゴリ作成 |
 | DELETE | `/categories/{id}` | 自分のカテゴリ削除 |
@@ -138,7 +138,7 @@ curl -s -X PUT "$BASE/items/12" \
 ```bash
 curl -s -X DELETE "$BASE/items/12" -H "Authorization: Bearer $TOKEN" -i
 ```
-`204`（本文なし）/ 無ければ `404`。画像があれば S3 からも削除されます。
+`204`（本文なし）/ 無ければ `404`。DB上のアイテムを削除した後、画像があれば S3 から削除します。S3の後処理に失敗してもDB削除は取り消さず`204`を返し、失敗をサーバーログへ記録します。その場合は未参照の画像がS3に残る可能性があります。
 
 ---
 

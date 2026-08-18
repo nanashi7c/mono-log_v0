@@ -7,7 +7,6 @@ import type {
 } from "@/features/items/application/item-write-ports";
 import {
   createItemUseCase,
-  deleteItemUseCase,
   updateItemUseCase,
 } from "@/features/items/application/item-write-use-cases";
 
@@ -54,10 +53,6 @@ function createDependencies() {
     create: vi.fn(async () => 10),
     update: vi.fn(async () => ({
       type: "updated" as const,
-      previousImageKey: "old.png",
-    })),
-    delete: vi.fn(async () => ({
-      type: "deleted" as const,
       previousImageKey: "old.png",
     })),
   };
@@ -183,58 +178,6 @@ describe("updateItemUseCase", () => {
       input,
       { type: "keep" },
     );
-    expect(dependencies.imageStore.remove).not.toHaveBeenCalled();
-  });
-});
-
-describe("deleteItemUseCase", () => {
-  it("DBからアイテムを削除してから画像を削除する", async () => {
-    const dependencies = createDependencies();
-
-    const result = await deleteItemUseCase(dependencies, {
-      userId: "user-1",
-      itemId: 10,
-    });
-
-    expect(result).toEqual({
-      type: "deleted",
-      previousImageKey: "old.png",
-    });
-    expect(dependencies.repository.delete).toHaveBeenCalledWith("user-1", 10);
-    expect(dependencies.imageStore.remove).toHaveBeenCalledWith("old.png");
-    expect(vi.mocked(dependencies.repository.delete).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(dependencies.imageStore.remove).mock.invocationCallOrder[0],
-    );
-  });
-
-  it("DB成功後の画像削除失敗を通知し、削除処理自体は成功にする", async () => {
-    const dependencies = createDependencies();
-    const cleanupError = new Error("storage error");
-    dependencies.imageStore.remove = vi.fn(async () => {
-      throw cleanupError;
-    });
-
-    await expect(
-      deleteItemUseCase(dependencies, { userId: "user-1", itemId: 10 }),
-    ).resolves.toEqual({
-      type: "deleted",
-      previousImageKey: "old.png",
-    });
-    expect(dependencies.onCleanupError).toHaveBeenCalledWith(cleanupError);
-  });
-
-  it("削除対象が存在しない場合は画像を削除しない", async () => {
-    const dependencies = createDependencies();
-    dependencies.repository.delete = vi.fn(async () => ({
-      type: "not_found" as const,
-    }));
-
-    const result = await deleteItemUseCase(dependencies, {
-      userId: "user-1",
-      itemId: 10,
-    });
-
-    expect(result).toEqual({ type: "not_found" });
     expect(dependencies.imageStore.remove).not.toHaveBeenCalled();
   });
 });

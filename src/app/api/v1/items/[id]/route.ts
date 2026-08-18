@@ -1,11 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { withUser } from "@/db/client";
 import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
 import { updateApiItemUseCase } from "@/features/items/application/item-api-command-use-cases";
 import { loadApiItemUseCase } from "@/features/items/application/item-api-query-use-cases";
+import { deleteItemUseCase } from "@/features/items/application/item-delete-use-case";
 import { prismaItemApiCommandRepository } from "@/features/items/infrastructure/prisma-item-api-command-repository";
 import { prismaItemApiQueryRepository } from "@/features/items/infrastructure/prisma-item-api-query-repository";
-import { deleteImage } from "@/lib/image";
+import { prismaItemDeleteRepository } from "@/features/items/infrastructure/prisma-item-delete-repository";
+import { s3ItemImageStore } from "@/features/items/infrastructure/s3-item-image-store";
 import { getApiUser, unauthorized, badRequest, jsonError, dbErrorResponse } from "@/lib/auth/api";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +16,13 @@ const itemApiQueryDependencies = Object.freeze({
 });
 const itemApiCommandDependencies = Object.freeze({
   repository: prismaItemApiCommandRepository,
+});
+const itemDeleteDependencies = Object.freeze({
+  repository: prismaItemDeleteRepository,
+  imageRemover: s3ItemImageStore,
+  onCleanupError(error: unknown) {
+    console.error("アイテム削除後の画像削除に失敗しました。", error);
+  },
 });
 
 function parseId(raw: string): number | null {
@@ -75,7 +83,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
 }
 
-// DELETE /api/v1/items/:id … アイテムを削除（画像も S3 から削除）。無ければ 404。
+// DELETE /api/v1/items/:id … アイテムを削除後、画像をベストエフォートで削除。無ければ 404。
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const user = await getApiUser(req);
   if (!user) return unauthorized();
@@ -83,17 +91,11 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   if (id == null) return badRequest("invalid id");
 
   try {
-    const deleted = await withUser(user.sub, async (tx) => {
-      const row = await tx.item.findFirst({
-        where: { id: BigInt(id) },
-        select: { imageUrl: true },
-      });
-      if (!row) return false;
-      if (row.imageUrl) await deleteImage(row.imageUrl);
-      await tx.item.deleteMany({ where: { id: BigInt(id) } });
-      return true;
+    const result = await deleteItemUseCase(itemDeleteDependencies, {
+      userId: user.sub,
+      itemId: id,
     });
-    if (!deleted) return jsonError(404, "not found");
+    if (result.type === "not_found") return jsonError(404, "not found");
     return new NextResponse(null, { status: 204 });
   } catch (e) {
     return dbErrorResponse(e);

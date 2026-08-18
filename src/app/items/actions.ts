@@ -3,12 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 import { parseItemForm } from "@/features/items/adapters/parse-item-form";
+import { deleteItemUseCase } from "@/features/items/application/item-delete-use-case";
 import type { ItemUpdateResult } from "@/features/items/application/item-write-ports";
 import {
   createItemUseCase,
-  deleteItemUseCase,
   updateItemUseCase,
 } from "@/features/items/application/item-write-use-cases";
+import { prismaItemDeleteRepository } from "@/features/items/infrastructure/prisma-item-delete-repository";
 import { prismaItemWriteRepository } from "@/features/items/infrastructure/prisma-item-write-repository";
 import { s3ItemImageStore } from "@/features/items/infrastructure/s3-item-image-store";
 import { getCurrentUser } from "@/lib/auth/session";
@@ -18,6 +19,14 @@ const itemWriteDependencies = {
   imageStore: s3ItemImageStore,
   onCleanupError(error: unknown) {
     console.error("アイテム画像の後処理に失敗しました。", error);
+  },
+} as const;
+
+const itemDeleteDependencies = {
+  repository: prismaItemDeleteRepository,
+  imageRemover: s3ItemImageStore,
+  onCleanupError(error: unknown) {
+    console.error("アイテム削除後の画像削除に失敗しました。", error);
   },
 } as const;
 
@@ -100,7 +109,7 @@ export async function updateItem(itemId: number, formData: FormData) {
 export async function deleteItem(itemId: number) {
   const user = await authed();
 
-  const result = await deleteItemUseCase(itemWriteDependencies, {
+  const result = await deleteItemUseCase(itemDeleteDependencies, {
     userId: user.sub,
     itemId,
   });

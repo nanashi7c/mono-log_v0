@@ -90,21 +90,6 @@ export function createPrismaItemWriteRepository(
       });
     },
 
-    async delete(userId, itemId) {
-      return runWithUser(userId, async (tx) => {
-        const existing = await tx.item.findFirst({
-          where: { id: BigInt(itemId) },
-          select: { imageUrl: true },
-        });
-        if (!existing) return { type: "not_found" };
-
-        await tx.item.deleteMany({ where: { id: BigInt(itemId) } });
-        return {
-          type: "deleted",
-          previousImageKey: existing.imageUrl,
-        };
-      });
-    },
   };
 }
 

@@ -22,13 +22,6 @@ export type ItemUpdateResult =
       previousImageKey: string | null;
     }>;
 
-export type ItemDeleteResult =
-  | ItemNotFoundResult
-  | Readonly<{
-      type: "deleted";
-      previousImageKey: string | null;
-    }>;
-
 export interface ItemWriteRepository {
   create(
     userId: string,
@@ -41,7 +34,6 @@ export interface ItemWriteRepository {
     input: ItemWriteInput,
     imageChange: ItemImageChange,
   ): Promise<ItemUpdateResult>;
-  delete(userId: string, itemId: number): Promise<ItemDeleteResult>;
 }
 
 export interface ItemImageStore {

@@ -132,6 +132,8 @@ export interface ItemApiQueryRepository {
 
 作成・更新も同様に、`item-api-command-ports.ts`と`item-api-command-use-cases.ts`をapplication層、`prisma-item-api-command-repository.ts`をinfrastructure層へ置きます。画面用writeは画像・plan・listingも同期するため再利用せず、REST v1のコア項目とカテゴリだけを扱う専用境界にします。
 
+削除は画面とRESTで同じ契約なので、`item-delete-ports.ts`と`item-delete-use-case.ts`をapplication層、`prisma-item-delete-repository.ts`をinfrastructure層へ置いて共有します。DB削除を確定してからS3画像を後処理し、外部I/OをDBトランザクションの外へ分離します。
+
 ---
 
 ## Step 4. items 一覧/作成 `src/app/api/v1/items/route.ts`
@@ -273,20 +275,18 @@ export async function PUT(req, ctx) {
 
 ```ts
 export async function DELETE(req, ctx) {
-  const deleted = await withUser(user.sub, async (tx) => {
-    const row = await tx.item.findFirst({ where: { id: BigInt(id) }, select: { imageUrl: true } });
-    if (!row) return false;
-    if (row.imageUrl) await deleteImage(row.imageUrl);
-    await tx.item.deleteMany({ where: { id: BigInt(id) } });
-    return true;
+  const result = await deleteItemUseCase(itemDeleteDependencies, {
+    userId: user.sub,
+    itemId: id,
   });
-  if (!deleted) return jsonError(404, "not found");
+  if (result.type === "not_found") return jsonError(404, "not found");
   return new NextResponse(null, { status: 204 });
 }
 ```
 **逐行解説**
-- 先に`image_url`を読み、あれば`deleteImage`でS3からも削除。
-- `tx.item.deleteMany({ where: { id: BigInt(id) } })`: 行削除(関連は`on delete cascade`)。
+- `deleteItemUseCase(...)`: repositoryへDB削除を依頼し、成功後に返された以前の画像キーをS3から削除する。DBトランザクション中にS3通信は行わない。
+- repositoryの`tx.item.deleteMany(...)`: 行削除（関連は`on delete cascade`）。RLSにより他人の行は見えず、`not_found`となる。
+- S3削除はベストエフォート。失敗はログへ通知するが、すでに確定したDB削除は取り消さず**204**を返す。未参照画像の再試行・定期清掃は将来の拡張点。
 - 対象が無ければ404、成功は**204 No Content**(本文なし)。
 
 ---
