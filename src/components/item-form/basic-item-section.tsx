@@ -1,5 +1,5 @@
 import { CategorySelector } from "@/components/item-form/category-selector";
-import { Field } from "@/components/item-form/field";
+import { Field, FieldGroup } from "@/components/item-form/field";
 import { ItemImageField } from "@/components/item-form/item-image-field";
 import { ACTUAL_PRICE_MAX } from "@/lib/validation/actual-price";
 import { INTEGER_MAX } from "@/lib/validation/numeric";
@@ -33,7 +33,7 @@ export function BasicItemSection({
     <section className={styles.section}>
       <h2 className={styles.sectionTitle}>基本情報</h2>
 
-      <Field label="アイテム種別 *">
+      <FieldGroup label="アイテム種別 *">
         <div className={styles.statusGroup}>
           {STATUS_OPTIONS.map((option) => (
             <label
@@ -51,7 +51,7 @@ export function BasicItemSection({
             </label>
           ))}
         </div>
-      </Field>
+      </FieldGroup>
 
       <Field label="名前 *">
         <input name="name" required defaultValue={item?.name ?? ""} className={styles.input} />

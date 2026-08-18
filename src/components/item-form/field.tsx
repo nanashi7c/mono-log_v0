@@ -14,3 +14,12 @@ export function Field({ label, children }: FieldProps) {
     </label>
   );
 }
+
+export function FieldGroup({ label, children }: FieldProps) {
+  return (
+    <fieldset className={`${styles.field} ${styles.fieldGroup}`}>
+      <legend className={styles.fieldLabel}>{label}</legend>
+      {children}
+    </fieldset>
+  );
+}

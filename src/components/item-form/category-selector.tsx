@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { toggleCategorySelection } from "@/components/item-form/category-selection";
-import { Field } from "@/components/item-form/field";
+import { FieldGroup } from "@/components/item-form/field";
 import type { Category } from "@/types/item";
 import styles from "@/components/item-form.module.css";
 
@@ -24,7 +24,7 @@ export function CategorySelector({
   }
 
   return (
-    <Field label="カテゴリ（複数選択可）">
+    <FieldGroup label="カテゴリ（複数選択可）">
       {categories.length === 0 ? (
         <p className={styles.categoriesEmpty}>
           登録済みカテゴリはありません。下の入力欄から作成できます。
@@ -46,7 +46,12 @@ export function CategorySelector({
                   checked={isSelected}
                   onChange={() => handleCategoryChange(category.id)}
                 />
-                ● {category.name}
+                <span
+                  aria-hidden="true"
+                  className={styles.categoryDot}
+                  style={{ backgroundColor: category.color }}
+                />
+                {category.name}
               </label>
             );
           })}
@@ -58,6 +63,6 @@ export function CategorySelector({
         className={styles.input}
         style={{ marginTop: "0.5rem" }}
       />
-    </Field>
+    </FieldGroup>
   );
 }
