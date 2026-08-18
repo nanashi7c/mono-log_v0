@@ -208,6 +208,27 @@ describe("prismaItemWriteRepository", () => {
       plan: null,
     });
     expect(updated?.listing?.sellingPrice?.toNumber()).toBe(15_000);
+
+    const ownedUpdateResult = await repository.update(
+      userId,
+      itemId,
+      ownedInput("owned item"),
+      { type: "keep" },
+    );
+    const owned = await admin.item.findUnique({
+      where: { id: BigInt(itemId) },
+      include: { listing: true },
+    });
+    expect(ownedUpdateResult).toEqual({
+      type: "updated",
+      previousImageKey: "new-image.png",
+    });
+    expect(owned).toMatchObject({ status: "owned", name: "owned item" });
+    expect(owned?.listing?.quantity).toBe(1);
+    expect(owned?.listing?.sellingPrice?.toNumber()).toBe(15_000);
+    expect(owned?.listing?.packagingCost?.toNumber()).toBe(300);
+    expect(owned?.listing?.workTimeHours?.toNumber()).toBe(1);
+    expect(owned?.listing?.laborRate?.toNumber()).toBe(1_200);
   });
 
   it("DB制約違反時は先に作成したカテゴリもロールバックする", async () => {

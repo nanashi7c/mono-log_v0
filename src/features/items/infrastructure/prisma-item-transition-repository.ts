@@ -38,8 +38,6 @@ async function syncListingForTransition(
         create: { itemId },
       });
       return;
-    case "remove":
-      await tx.listing.deleteMany({ where: { itemId } });
   }
 }
 
