@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ItemApiData } from "@/features/items/application/item-api-query-data";
+import type { ItemApiData } from "@/features/items/application/item-api-data";
 import type { ItemApiQueryRepository } from "@/features/items/application/item-api-query-ports";
 import {
   loadApiItemUseCase,

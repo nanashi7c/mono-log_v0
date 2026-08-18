@@ -2,6 +2,7 @@ import {
   isItemStatus,
   type ItemStatus,
 } from "@/features/items/domain/status";
+import type { ItemApiCommandInput } from "@/features/items/application/item-api-command-input";
 import { parseActualPrice } from "@/lib/validation/actual-price";
 import {
   INTEGER_MAX,
@@ -9,19 +10,8 @@ import {
   parseRequiredInteger,
 } from "@/lib/validation/numeric";
 
-export type ParsedItemApiBody = Readonly<{
-  status: ItemStatus;
-  name: string;
-  janCode: string | null;
-  quantity: number;
-  notes: string | null;
-  actualPrice: number | null;
-  purchasedAt: string | null;
-  categoryIds: readonly number[];
-}>;
-
 type ParseItemApiBodyResult =
-  | { ok: true; value: ParsedItemApiBody }
+  | { ok: true; value: ItemApiCommandInput }
   | { ok: false; error: string };
 
 function stringOrNull(value: unknown): string | null {

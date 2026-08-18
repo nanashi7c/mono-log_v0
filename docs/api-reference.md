@@ -201,6 +201,6 @@ curl -s "$BASE/export" -H "Authorization: Bearer $TOKEN"
 
 ## 設計メモ・制約（v1）
 - **認証**: Cognito の**IDトークン**を Bearer に使用（`aws-jwt-verify` で検証、`tokenUse: "id"`）。`sub` を RLS の `app.current_user_id()` に流し込み、自分の行だけに制限。
-- **users 行の自動確保**: 書き込み系(POST)では FK のため `users` 行を `onConflictDoNothing` で先に確保する（Web ログイン未経験のAPI専用クライアントでも動く）。
+- **users 行の自動確保**: 書き込み系(POST)では FK のため `users` 行を Prisma の `upsert` で先に確保する（Web ログイン未経験のAPI専用クライアントでも動く）。
 - **middleware 対象外**: `/api/*` は `middleware` のリダイレクト対象から除外済み（Bearer クライアントに `/login` リダイレクトでなく JSON を返すため）。
 - **未対応(将来)**: 画像アップロード（multipart/base64）、plan・listing のAPI公開、CORS（ブラウザの別オリジンから叩く場合に必要）、ページング、レート制限。必要になったら追加します。

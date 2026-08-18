@@ -1,7 +1,8 @@
 import { withUser, type Tx } from "@/db/client";
 import { toItem } from "@/db/serialize";
-import type { ItemApiData } from "@/features/items/application/item-api-query-data";
+import type { ItemApiData } from "@/features/items/application/item-api-data";
 import type { ItemApiQueryRepository } from "@/features/items/application/item-api-query-ports";
+import { toItemApiData } from "@/features/items/infrastructure/item-api-data-mapper";
 
 export type ItemApiQueryTransactionRunner = <T>(
   userId: string,
@@ -34,16 +35,6 @@ async function categoryIdsByItem(
   );
 }
 
-function toItemApiData(
-  row: Parameters<typeof toItem>[0],
-  categoryIds: readonly number[],
-): ItemApiData {
-  return Object.freeze({
-    ...toItem(row),
-    category_ids: categoryIds,
-  });
-}
-
 export function createPrismaItemApiQueryRepository(
   runWithUser: ItemApiQueryTransactionRunner,
 ): ItemApiQueryRepository {
@@ -60,7 +51,7 @@ export function createPrismaItemApiQueryRepository(
           rows.map((row) => {
             const itemId = Number(row.id);
             return toItemApiData(
-              row,
+              toItem(row),
               categoryIds.get(itemId) ?? Object.freeze([]),
             );
           }),
@@ -75,7 +66,7 @@ export function createPrismaItemApiQueryRepository(
 
         const categoryIds = await categoryIdsByItem(tx, [itemId]);
         return toItemApiData(
-          row,
+          toItem(row),
           categoryIds.get(itemId) ?? Object.freeze([]),
         );
       });

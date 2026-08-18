@@ -79,17 +79,17 @@ export function dbErrorResponse(e: unknown): NextResponse {
 
 ---
 
-## Step 3. items 入力変換とカテゴリ参照
+## Step 3. items 入力変換と永続化境界
 
 JSON の検証・整形は、外部形式を内部形式へ変換する adapter に置きます。
 
-`src/features/items/adapters/parse-item-api-body.ts`:
+`src/features/items/application/item-api-command-input.ts`と`src/features/items/adapters/parse-item-api-body.ts`:
 
 ```ts
 // 公開contractの抜粋。検証処理の本体はこのファイルを参照してください。
 import type { ItemStatus } from "@/features/items/domain/status";
 
-export type ParsedItemApiBody = Readonly<{
+export type ItemApiCommandInput = Readonly<{
   status: ItemStatus;
   name: string;
   janCode: string | null;
@@ -101,7 +101,7 @@ export type ParsedItemApiBody = Readonly<{
 }>;
 
 export function parseItemApiBody(body: unknown):
-  | { ok: true; value: ParsedItemApiBody }
+  | { ok: true; value: ItemApiCommandInput }
   | { ok: false; error: string } {
   // name、status、数値境界、category_idsを検証し、snake_caseをcamelCaseへ変換する。
 }
@@ -109,7 +109,7 @@ export function parseItemApiBody(body: unknown):
 
 **ポイント**
 - `parseItemApiBody(body)`: 受け取ったJSONを検証・整形する純粋関数。戻り値は`ok`で判定できる共用体です。
-- `ParsedItemApiBody`: API境界専用の読み取り専用型です。フォーム入力用の型と混同しません。
+- `ItemApiCommandInput`: application層に置くAPI更新専用の読み取り専用型です。フォーム入力用の型と混同しません。
 - `status`: 未指定は`owned`。指定時はドメイン層の`isItemStatus`で検証します。
 - `quantity`、`actual_price`、`category_ids`: 共通の数値検証関数でDB上限を含めて検証します。
 - `category_ids`: 配列の各要素を正の整数へ変換します。
@@ -119,7 +119,7 @@ DBへ依存する一覧・詳細検索は、入力変換と分けて専用reposi
 `src/features/items/application/item-api-query-ports.ts`:
 
 ```ts
-import type { ItemApiData } from "@/features/items/application/item-api-query-data";
+import type { ItemApiData } from "@/features/items/application/item-api-data";
 import type { ItemStatus } from "@/features/items/domain/status";
 
 export interface ItemApiQueryRepository {
@@ -130,23 +130,28 @@ export interface ItemApiQueryRepository {
 
 `prisma-item-api-query-repository.ts`がRLSトランザクション、Prisma検索、カテゴリIDの一括取得、API形式への変換を担当します。routeは認証・入力検証・HTTP応答だけを担当し、use caseを介してrepositoryを呼びます。
 
+作成・更新も同様に、`item-api-command-ports.ts`と`item-api-command-use-cases.ts`をapplication層、`prisma-item-api-command-repository.ts`をinfrastructure層へ置きます。画面用writeは画像・plan・listingも同期するため再利用せず、REST v1のコア項目とカテゴリだけを扱う専用境界にします。
+
 ---
 
 ## Step 4. items 一覧/作成 `src/app/api/v1/items/route.ts`
 ```ts
 import { NextResponse, type NextRequest } from "next/server";
-import { withUser } from "@/db/client";
-import { toItem } from "@/db/serialize";
 import { getApiUser, unauthorized, badRequest, dbErrorResponse } from "@/lib/auth/api";
 import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
+import { createApiItemUseCase } from "@/features/items/application/item-api-command-use-cases";
 import { loadApiItemsUseCase } from "@/features/items/application/item-api-query-use-cases";
 import { isItemStatus, type ItemStatus } from "@/features/items/domain/status";
+import { prismaItemApiCommandRepository } from "@/features/items/infrastructure/prisma-item-api-command-repository";
 import { prismaItemApiQueryRepository } from "@/features/items/infrastructure/prisma-item-api-query-repository";
 
 export const dynamic = "force-dynamic";
 
 const itemApiQueryDependencies = Object.freeze({
   repository: prismaItemApiQueryRepository,
+});
+const itemApiCommandDependencies = Object.freeze({
+  repository: prismaItemApiCommandRepository,
 });
 
 export async function GET(req: NextRequest) {
@@ -191,31 +196,13 @@ export async function POST(req: NextRequest) {
   try { body = await req.json(); } catch { return badRequest("invalid JSON body"); }
   const parsed = parseItemApiBody(body);
   if (!parsed.ok) return badRequest(parsed.error);
-  const v = parsed.value;
 
   try {
-    const created = await withUser(user.sub, async (tx) => {
-      // FK対策: users 行を upsert で確保
-      await tx.user.upsert({
-        where: { id: user.sub },
-        update: {},
-        create: { id: user.sub, email: user.email, username: user.email.split("@")[0] },
-      });
-      const row = await tx.item.create({
-        data: {
-          userId: user.sub, status: v.status, name: v.name, janCode: v.janCode,
-          quantity: v.quantity, notes: v.notes, actualPrice: v.actualPrice,
-          purchasedAt: v.purchasedAt ? new Date(v.purchasedAt) : null,
-        },
-      });
-      if (v.categoryIds.length > 0) {
-        await tx.itemCategory.createMany({
-          data: v.categoryIds.map((cid) => ({ itemId: row.id, categoryId: cid })),
-        });
-      }
-      return { ...toItem(row), category_ids: v.categoryIds };
+    const item = await createApiItemUseCase(itemApiCommandDependencies, {
+      actor: { userId: user.sub, email: user.email },
+      input: parsed.value,
     });
-    return NextResponse.json({ item: created }, { status: 201 });
+    return NextResponse.json({ item }, { status: 201 });
   } catch (e) {
     return dbErrorResponse(e);
   }
@@ -224,12 +211,9 @@ export async function POST(req: NextRequest) {
 **逐行解説**
 - `let body; try { body = await req.json() } catch { return badRequest(...) }`: リクエストボディをJSONとして読む。壊れていれば400。
 - `const parsed = parseItemApiBody(body); if (!parsed.ok) return badRequest(parsed.error)`: 検証。失敗で400。
-- `await withUser(user.sub, async (tx) => {...})`内:
-  - `tx.user.upsert({ where:{id}, update:{}, create:{...} })`: **FK対策**。`items.user_id → users.id`のため、API専用クライアント(Web未ログイン)でも動くよう`users`行を先に確保（あれば何もしない）。
-  - `tx.item.create({ data:{...} })`: アイテム挿入し作成行を取得（`purchasedAt`は`new Date()`で日付化）。
-  - `if (v.categoryIds.length > 0) { tx.itemCategory.createMany(...) }`: カテゴリ紐付けを一括挿入。
-  - `return { ...toItem(row), category_ids: v.categoryIds }`: 作成結果をAPI形で返す。
-- `NextResponse.json({ item: created }, { status: 201 })`: **201 Created**で返す。
+- `createApiItemUseCase(...)`: 認証済みユーザーと検証済み入力をcommand境界へ渡す。
+- `prismaItemApiCommandRepository`: 1つのRLSトランザクションで`users`行の自動確保、item作成、カテゴリ紐付け、API DTO変換を行う。
+- `NextResponse.json({ item }, { status: 201 })`: **201 Created**で返す。
 
 ---
 
@@ -267,24 +251,20 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 ```ts
 export async function PUT(req, ctx) {
   /* getApiUser → parseId → req.json → parseItemApiBody */
-  const result = await withUser(user.sub, async (tx) => {
-    // RLSで他人の行は見えない。存在確認してから更新。
-    const exists = await tx.item.findFirst({ where: { id: BigInt(id) }, select: { id: true } });
-    if (!exists) return null;
-    const row = await tx.item.update({ where: { id: BigInt(id) }, data: { /* v各項目(purchasedAtはnew Date) */ } });
-    await tx.itemCategory.deleteMany({ where: { itemId: BigInt(id) } });
-    if (v.categoryIds.length > 0) await tx.itemCategory.createMany({ data: /* 置換 */ });
-    return { ...toItem(row), category_ids: v.categoryIds };
+  const item = await updateApiItemUseCase(itemApiCommandDependencies, {
+    userId: user.sub,
+    itemId: id,
+    input: parsed.value,
   });
-  if (!result) return jsonError(404, "not found");
-  return NextResponse.json({ item: result });
+  if (!item) return jsonError(404, "not found");
+  return NextResponse.json({ item });
 }
 ```
 **逐行解説**
 - 入口はPOSTと同様(認証・id・body検証)。
-- `findFirst`で存在確認(他人/存在しない＝`null`→**404**)→`tx.item.update({ where:{id}, data })`で更新し行を取得。
-- カテゴリは**置換**: `deleteMany`で全消し→`createMany`で入れ直す。
-- 更新後の行を返す。
+- `updateApiItemUseCase(...)`へユーザーID、item ID、検証済み入力を渡す。
+- repositoryはRLS下で存在確認し、コア項目とカテゴリだけを同一トランザクションで更新する。画像・plan・listingは変更しない。
+- 他人または存在しないitemは`null`→**404**、更新後はimmutableなAPI DTOを返す。
 
 ```ts
 export async function DELETE(req, ctx) {
