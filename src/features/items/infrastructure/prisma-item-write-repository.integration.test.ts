@@ -88,6 +88,23 @@ async function createTestUser(label: string): Promise<string> {
   return userId;
 }
 
+async function reserveImageUpload(
+  userId: string,
+  objectKey: string,
+): Promise<string> {
+  const uploadId = randomUUID();
+  await admin.pendingItemImageUpload.create({
+    data: {
+      id: uploadId,
+      userId,
+      objectKey,
+      contentType: "image/png",
+      expiresAt: new Date(Date.now() + 60_000),
+    },
+  });
+  return uploadId;
+}
+
 async function removeTestUsers(): Promise<void> {
   const userIds = [...testUserIds];
   if (userIds.length > 0) {
@@ -124,11 +141,12 @@ describe("prismaItemWriteRepository", () => {
         dealPeriod: "spring",
       },
     };
+    const initialUploadId = await reserveImageUpload(userId, "old-image.png");
 
     const itemId = await repository.create(
       userId,
       plannedInput,
-      "old-image.png",
+      initialUploadId,
     );
     const created = await admin.item.findUnique({
       where: { id: BigInt(itemId) },
@@ -147,6 +165,11 @@ describe("prismaItemWriteRepository", () => {
     expect(
       created?.itemCategories.map(({ category }) => category.name),
     ).toContain("integration category");
+    await expect(
+      admin.pendingItemImageUpload.findUnique({
+        where: { id: initialUploadId },
+      }),
+    ).resolves.toBeNull();
 
     const listedInput: ItemWriteInput = {
       ...ownedInput("listed item"),
@@ -160,11 +183,15 @@ describe("prismaItemWriteRepository", () => {
         laborRate: 1_200,
       },
     };
+    const replacementUploadId = await reserveImageUpload(
+      userId,
+      "new-image.png",
+    );
     const updateResult = await repository.update(
       userId,
       itemId,
       listedInput,
-      { type: "replace", key: "new-image.png" },
+      { type: "replace", uploadId: replacementUploadId },
     );
     const updated = await admin.item.findUnique({
       where: { id: BigInt(itemId) },
@@ -201,13 +228,66 @@ describe("prismaItemWriteRepository", () => {
     ).resolves.toBeNull();
   });
 
+  it("DB作成に失敗した場合はpending画像を消費しない", async () => {
+    const userId = await createTestUser("image-rollback");
+    const uploadId = await reserveImageUpload(userId, "rollback-image.png");
+    const invalidInput: ItemWriteInput = {
+      ...ownedInput("invalid image item"),
+      quantity: 0,
+    };
+
+    await expect(
+      repository.create(userId, invalidInput, uploadId),
+    ).rejects.toThrow();
+    await expect(
+      admin.pendingItemImageUpload.findUnique({ where: { id: uploadId } }),
+    ).resolves.toMatchObject({ objectKey: "rollback-image.png" });
+  });
+
+  it("他ユーザーのpending画像を使用できない", async () => {
+    const ownerId = await createTestUser("upload-owner");
+    const intruderId = await createTestUser("upload-intruder");
+    const uploadId = await reserveImageUpload(ownerId, "private-image.png");
+
+    await expect(
+      repository.create(
+        intruderId,
+        ownedInput("invalid upload owner"),
+        uploadId,
+      ),
+    ).rejects.toThrow("画像アップロードの有効期限");
+    await expect(
+      admin.item.count({ where: { userId: intruderId } }),
+    ).resolves.toBe(0);
+    await expect(
+      admin.pendingItemImageUpload.findUnique({ where: { id: uploadId } }),
+    ).resolves.toMatchObject({ userId: ownerId });
+  });
+
+  it("期限切れのpending画像を使用できない", async () => {
+    const userId = await createTestUser("expired-upload");
+    const uploadId = await reserveImageUpload(userId, "expired-image.png");
+    await admin.pendingItemImageUpload.update({
+      where: { id: uploadId },
+      data: { expiresAt: new Date(Date.now() - 1_000) },
+    });
+
+    await expect(
+      repository.create(userId, ownedInput("expired image"), uploadId),
+    ).rejects.toThrow("画像アップロードの有効期限");
+    await expect(
+      admin.pendingItemImageUpload.findUnique({ where: { id: uploadId } }),
+    ).resolves.toMatchObject({ objectKey: "expired-image.png" });
+  });
+
   it("他ユーザーのアイテムを更新できない", async () => {
     const ownerId = await createTestUser("owner");
     const intruderId = await createTestUser("intruder");
+    const ownerUploadId = await reserveImageUpload(ownerId, "owner-image.png");
     const itemId = await repository.create(
       ownerId,
       ownedInput("owner item"),
-      "owner-image.png",
+      ownerUploadId,
     );
 
     const updateResult = await repository.update(

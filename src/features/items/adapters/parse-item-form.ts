@@ -12,7 +12,7 @@ import {
 
 export type ParsedItemForm = Readonly<{
   input: ItemWriteInput;
-  image: File | null;
+  imageUploadId: string | null;
   deleteImage: boolean;
 }>;
 
@@ -144,8 +144,15 @@ export function parseItemForm(formData: FormData): ParseItemFormResult {
 
   const quantity = quantityResult.value ?? 1;
 
-  const file = formData.get("image");
-  const image = file instanceof File && file.size > 0 ? file : null;
+  const imageUploadId = stringOrNull(formData.get("image_upload_id"));
+  if (
+    imageUploadId &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      imageUploadId,
+    )
+  ) {
+    return { ok: false, error: "画像アップロードIDが不正です。" };
+  }
 
   return {
     ok: true,
@@ -179,7 +186,7 @@ export function parseItemForm(formData: FormData): ParseItemFormResult {
           laborRate: laborRate.value,
         },
       },
-      image,
+      imageUploadId,
       deleteImage: String(formData.get("delete_image") ?? "") === "1",
     },
   };

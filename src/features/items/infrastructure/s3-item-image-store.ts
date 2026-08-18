@@ -1,16 +1,19 @@
-import { randomUUID } from "node:crypto";
-import type { ItemImageStore } from "@/features/items/application/item-write-ports";
-import { deleteImage, putImage } from "@/lib/image";
+import type {
+  ItemImageObjectStore,
+  ItemImageUploadSigner,
+} from "@/features/items/application/item-image-upload-ports";
+import { createSignedImageUpload, deleteImage, inspectImage } from "@/lib/image";
 
-export const s3ItemImageStore: ItemImageStore = {
-  async upload(userId, file) {
-    const extension = (file.name.split(".").pop() ?? "bin").toLowerCase();
-    const key = `${userId}/items/${randomUUID()}.${extension}`;
-    const body = Buffer.from(await file.arrayBuffer());
-    await putImage(key, body, file.type || undefined);
-    return key;
+export const s3ItemImageUploadSigner: ItemImageUploadSigner = {
+  async sign(policy) {
+    return createSignedImageUpload(policy);
   },
+};
 
+export const s3ItemImageStore: ItemImageObjectStore = {
+  async inspect(key) {
+    return inspectImage(key);
+  },
   async remove(key) {
     await deleteImage(key);
   },

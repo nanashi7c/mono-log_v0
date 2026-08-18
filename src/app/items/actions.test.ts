@@ -52,6 +52,13 @@ vi.mock(
   }),
 );
 
+vi.mock(
+  "@/features/items/infrastructure/prisma-pending-item-image-upload-repository",
+  () => ({
+    prismaPendingItemImageUploadRepository: {},
+  }),
+);
+
 vi.mock("@/features/items/infrastructure/s3-item-image-store", () => ({
   s3ItemImageStore: {},
 }));
@@ -99,7 +106,7 @@ beforeEach(() => {
     ok: true,
     value: {
       input,
-      image: null,
+      imageUploadId: null,
       deleteImage: false,
     },
   });
@@ -143,7 +150,7 @@ describe("updateItem", () => {
       userId: "user-1",
       itemId: 10,
       input,
-      image: null,
+      imageUploadId: null,
       deleteImage: false,
     });
     expect(mocks.revalidatePath.mock.calls.map(([path]) => path)).toEqual([

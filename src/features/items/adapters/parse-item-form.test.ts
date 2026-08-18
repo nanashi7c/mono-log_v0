@@ -56,14 +56,24 @@ describe("parseItemForm", () => {
     });
   });
 
-  it("空ではない画像ファイルを保持する", () => {
+  it("直接アップロード済み画像のIDを保持する", () => {
     const formData = validFormData();
-    const image = new File(["image"], "photo.png", { type: "image/png" });
-    formData.set("image", image);
+    const imageUploadId = "123e4567-e89b-42d3-a456-426614174000";
+    formData.set("image_upload_id", imageUploadId);
 
     expect(parseItemForm(formData)).toMatchObject({
       ok: true,
-      value: { image },
+      value: { imageUploadId },
+    });
+  });
+
+  it("画像アップロードIDがUUIDでなければ拒否する", () => {
+    const formData = validFormData();
+    formData.set("image_upload_id", "not-an-upload-id");
+
+    expect(parseItemForm(formData)).toEqual({
+      ok: false,
+      error: "画像アップロードIDが不正です。",
     });
   });
 });

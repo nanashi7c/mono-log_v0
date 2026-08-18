@@ -11,12 +11,15 @@ import {
 } from "@/features/items/application/item-write-use-cases";
 import { prismaItemDeleteRepository } from "@/features/items/infrastructure/prisma-item-delete-repository";
 import { prismaItemWriteRepository } from "@/features/items/infrastructure/prisma-item-write-repository";
+import { prismaPendingItemImageUploadRepository } from "@/features/items/infrastructure/prisma-pending-item-image-upload-repository";
 import { s3ItemImageStore } from "@/features/items/infrastructure/s3-item-image-store";
 import { getCurrentUser } from "@/lib/auth/session";
 
 const itemWriteDependencies = {
   repository: prismaItemWriteRepository,
+  pendingImageUploads: prismaPendingItemImageUploadRepository,
   imageStore: s3ItemImageStore,
+  now: Date.now,
   onCleanupError(error: unknown) {
     console.error("アイテム画像の後処理に失敗しました。", error);
   },
@@ -64,7 +67,7 @@ export async function createItem(formData: FormData) {
     newId = await createItemUseCase(itemWriteDependencies, {
       userId: user.sub,
       input,
-      image: parsed.image,
+      imageUploadId: parsed.imageUploadId,
     });
   } catch (error) {
     redirect(`/items/new?error=${encodeURIComponent((error as Error).message)}`);
@@ -91,7 +94,7 @@ export async function updateItem(itemId: number, formData: FormData) {
       userId: user.sub,
       itemId,
       input,
-      image: parsed.image,
+      imageUploadId: parsed.imageUploadId,
       deleteImage: parsed.deleteImage,
     });
   } catch (error) {

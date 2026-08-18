@@ -5,6 +5,7 @@ import { prismaItemFormQueryRepository } from "@/features/items/infrastructure/p
 import { getCurrentUser } from "@/lib/auth/session";
 import { signedImageUrl } from "@/lib/image";
 import { deleteItem, updateItem } from "../../actions";
+import { prepareItemImageUpload } from "../../image-upload-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +56,7 @@ export default async function EditItemPage({
       initialServiceId={result.initialServiceId}
       initialSizeId={result.initialSizeId}
       action={updateAction}
+      prepareImageUpload={prepareItemImageUpload}
       onDelete={deleteAction}
       error={error}
     />

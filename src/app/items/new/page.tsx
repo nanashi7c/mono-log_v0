@@ -4,6 +4,7 @@ import { loadItemFormOptionsUseCase } from "@/features/items/application/item-fo
 import { prismaItemFormQueryRepository } from "@/features/items/infrastructure/prisma-item-form-query-repository";
 import { getCurrentUser } from "@/lib/auth/session";
 import { createItem } from "../actions";
+import { prepareItemImageUpload } from "../image-upload-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,7 @@ export default async function NewItemPage({
       services={options.services}
       sizes={options.sizes}
       action={createItem}
+      prepareImageUpload={prepareItemImageUpload}
       error={error}
     />
   );

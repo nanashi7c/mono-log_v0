@@ -23,3 +23,9 @@ variable "db_snapshot_identifier" {
   type        = string
   default     = null
 }
+
+variable "s3_upload_allowed_origins" {
+  description = "ブラウザから商品画像をS3へ直接送信できる追加オリジン"
+  type        = list(string)
+  default     = ["http://localhost:3000", "http://127.0.0.1:3000"]
+}

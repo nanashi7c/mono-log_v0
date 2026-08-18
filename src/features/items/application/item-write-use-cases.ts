@@ -1,29 +1,34 @@
 import type { ItemWriteInput } from "@/features/items/application/item-write-input";
 import type {
+  ItemImageObjectStore,
+  PendingItemImageUploadRepository,
+} from "@/features/items/application/item-image-upload-ports";
+import { verifyPendingItemImageUpload } from "@/features/items/application/item-image-upload-use-cases";
+import type {
   ItemImageChange,
-  ItemImageFile,
-  ItemImageStore,
   ItemUpdateResult,
   ItemWriteRepository,
 } from "@/features/items/application/item-write-ports";
 
 export type ItemWriteDependencies = Readonly<{
   repository: ItemWriteRepository;
-  imageStore: ItemImageStore;
+  pendingImageUploads: PendingItemImageUploadRepository;
+  imageStore: ItemImageObjectStore;
+  now: () => number;
   onCleanupError?: (error: unknown) => void;
 }>;
 
 export type CreateItemCommand = Readonly<{
   userId: string;
   input: ItemWriteInput;
-  image: ItemImageFile | null;
+  imageUploadId: string | null;
 }>;
 
 export type UpdateItemCommand = Readonly<{
   userId: string;
   itemId: number;
   input: ItemWriteInput;
-  image: ItemImageFile | null;
+  imageUploadId: string | null;
   deleteImage: boolean;
 }>;
 
@@ -53,76 +58,60 @@ export async function createItemUseCase(
   dependencies: ItemWriteDependencies,
   command: CreateItemCommand,
 ): Promise<number> {
-  let uploadedImageKey: string | null = null;
-
-  try {
-    if (command.image) {
-      uploadedImageKey = await dependencies.imageStore.upload(
-        command.userId,
-        command.image,
-      );
-    }
-
-    return await dependencies.repository.create(
+  if (command.imageUploadId) {
+    await verifyPendingItemImageUpload(
+      {
+        repository: dependencies.pendingImageUploads,
+        objectStore: dependencies.imageStore,
+        now: dependencies.now,
+      },
       command.userId,
-      command.input,
-      uploadedImageKey,
+      command.imageUploadId,
     );
-  } catch (error) {
-    if (uploadedImageKey) {
-      await removeImageBestEffort(dependencies, uploadedImageKey);
-    }
-    throw error;
   }
+
+  return dependencies.repository.create(
+    command.userId,
+    command.input,
+    command.imageUploadId,
+  );
 }
 
 export async function updateItemUseCase(
   dependencies: ItemWriteDependencies,
   command: UpdateItemCommand,
 ): Promise<ItemUpdateResult> {
-  let uploadedImageKey: string | null = null;
-
-  try {
-    if (command.image) {
-      uploadedImageKey = await dependencies.imageStore.upload(
-        command.userId,
-        command.image,
-      );
-    }
-
-    const imageChange: ItemImageChange = uploadedImageKey
-      ? { type: "replace", key: uploadedImageKey }
-      : command.deleteImage
-        ? { type: "remove" }
-        : { type: "keep" };
-
-    const result = await dependencies.repository.update(
+  if (command.imageUploadId) {
+    await verifyPendingItemImageUpload(
+      {
+        repository: dependencies.pendingImageUploads,
+        objectStore: dependencies.imageStore,
+        now: dependencies.now,
+      },
       command.userId,
-      command.itemId,
-      command.input,
-      imageChange,
+      command.imageUploadId,
     );
-
-    if (result.type === "not_found") {
-      if (uploadedImageKey) {
-        await removeImageBestEffort(dependencies, uploadedImageKey);
-        uploadedImageKey = null;
-      }
-      return result;
-    }
-
-    if (
-      imageChange.type !== "keep" &&
-      result.previousImageKey &&
-      result.previousImageKey !== uploadedImageKey
-    ) {
-      await removeImageBestEffort(dependencies, result.previousImageKey);
-    }
-    return result;
-  } catch (error) {
-    if (uploadedImageKey) {
-      await removeImageBestEffort(dependencies, uploadedImageKey);
-    }
-    throw error;
   }
+
+  const imageChange: ItemImageChange = command.imageUploadId
+    ? { type: "replace", uploadId: command.imageUploadId }
+    : command.deleteImage
+      ? { type: "remove" }
+      : { type: "keep" };
+
+  const result = await dependencies.repository.update(
+    command.userId,
+    command.itemId,
+    command.input,
+    imageChange,
+  );
+
+  if (
+    result.type === "updated" &&
+    imageChange.type !== "keep" &&
+    result.previousImageKey
+  ) {
+    await removeImageBestEffort(dependencies, result.previousImageKey);
+  }
+  return result;
 }

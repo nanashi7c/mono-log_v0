@@ -6,6 +6,7 @@ import { BasicItemSection } from "@/components/item-form/basic-item-section";
 import { FormActions } from "@/components/item-form/form-actions";
 import { ListedItemSection } from "@/components/item-form/listed-item-section";
 import { PlannedItemSection } from "@/components/item-form/planned-item-section";
+import type { PrepareItemImageUploadResult } from "@/features/items/application/item-image-upload-use-cases";
 import type {
   Category,
   Item,
@@ -33,6 +34,10 @@ type Props = Readonly<{
   initialServiceId?: number | null;
   initialSizeId?: number | null;
   action: (formData: FormData) => void;
+  prepareImageUpload: (input: Readonly<{
+    contentType: string;
+    size: number;
+  }>) => Promise<PrepareItemImageUploadResult>;
   onDelete?: (formData: FormData) => void;
   error?: string;
 }>;
@@ -51,10 +56,12 @@ export default function ItemForm({
   initialServiceId = null,
   initialSizeId = null,
   action,
+  prepareImageUpload,
   onDelete,
   error,
 }: Props) {
   const [status, setStatus] = useState<ItemStatus>(item?.status ?? "owned");
+  const [isImageUploading, setIsImageUploading] = useState(false);
 
   return (
     <div className={styles.container}>
@@ -69,7 +76,13 @@ export default function ItemForm({
 
       {error ? <p className={styles.error}>{decodeURIComponent(error)}</p> : null}
 
-      <form action={action} className={styles.form}>
+      <form
+        action={action}
+        className={styles.form}
+        onSubmit={(event) => {
+          if (isImageUploading) event.preventDefault();
+        }}
+      >
         <BasicItemSection
           item={item}
           imageUrl={imageUrl}
@@ -77,6 +90,8 @@ export default function ItemForm({
           initialSelectedCategoryIds={selectedCategoryIds}
           status={status}
           onStatusChange={setStatus}
+          prepareImageUpload={prepareImageUpload}
+          onImageUploadingChange={setIsImageUploading}
         />
 
         {status === "planned" ? <PlannedItemSection plan={plan} /> : null}
@@ -92,7 +107,12 @@ export default function ItemForm({
           />
         ) : null}
 
-        <FormActions mode={mode} item={item} onDelete={onDelete} />
+        <FormActions
+          mode={mode}
+          item={item}
+          onDelete={onDelete}
+          isImageUploading={isImageUploading}
+        />
       </form>
     </div>
   );

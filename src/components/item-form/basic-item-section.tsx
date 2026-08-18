@@ -1,6 +1,7 @@
 import { CategorySelector } from "@/components/item-form/category-selector";
 import { Field, FieldGroup } from "@/components/item-form/field";
 import { ItemImageField } from "@/components/item-form/item-image-field";
+import type { PrepareItemImageUploadResult } from "@/features/items/application/item-image-upload-use-cases";
 import { ACTUAL_PRICE_MAX } from "@/lib/validation/actual-price";
 import { INTEGER_MAX } from "@/lib/validation/numeric";
 import type { Category, Item, ItemStatus } from "@/types/item";
@@ -13,6 +14,11 @@ type BasicItemSectionProps = Readonly<{
   initialSelectedCategoryIds: readonly number[];
   status: ItemStatus;
   onStatusChange: (status: ItemStatus) => void;
+  prepareImageUpload: (input: Readonly<{
+    contentType: string;
+    size: number;
+  }>) => Promise<PrepareItemImageUploadResult>;
+  onImageUploadingChange: (isUploading: boolean) => void;
 }>;
 
 const STATUS_OPTIONS: readonly Readonly<{ value: ItemStatus; label: string }>[] = [
@@ -28,6 +34,8 @@ export function BasicItemSection({
   initialSelectedCategoryIds,
   status,
   onStatusChange,
+  prepareImageUpload,
+  onImageUploadingChange,
 }: BasicItemSectionProps) {
   return (
     <section className={styles.section}>
@@ -119,7 +127,11 @@ export function BasicItemSection({
         />
       </Field>
 
-      <ItemImageField imageUrl={imageUrl} />
+      <ItemImageField
+        imageUrl={imageUrl}
+        prepareImageUpload={prepareImageUpload}
+        onUploadingChange={onImageUploadingChange}
+      />
     </section>
   );
 }

@@ -1,15 +1,9 @@
 import type { ItemWriteInput } from "@/features/items/application/item-write-input";
 
-export type ItemImageFile = Readonly<{
-  name: string;
-  type: string;
-  arrayBuffer(): Promise<ArrayBuffer>;
-}>;
-
 export type ItemImageChange =
   | Readonly<{ type: "keep" }>
   | Readonly<{ type: "remove" }>
-  | Readonly<{ type: "replace"; key: string }>;
+  | Readonly<{ type: "replace"; uploadId: string }>;
 
 export type ItemNotFoundResult = Readonly<{
   type: "not_found";
@@ -26,7 +20,7 @@ export interface ItemWriteRepository {
   create(
     userId: string,
     input: ItemWriteInput,
-    imageKey: string | null,
+    imageUploadId: string | null,
   ): Promise<number>;
   update(
     userId: string,
@@ -34,9 +28,4 @@ export interface ItemWriteRepository {
     input: ItemWriteInput,
     imageChange: ItemImageChange,
   ): Promise<ItemUpdateResult>;
-}
-
-export interface ItemImageStore {
-  upload(userId: string, file: ItemImageFile): Promise<string>;
-  remove(key: string): Promise<void>;
 }
