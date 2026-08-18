@@ -15,14 +15,50 @@ export type UserTransactionRunner = <T>(
   operation: (tx: Tx) => Promise<T>,
 ) => Promise<T>;
 
-function imageUpdateData(imageChange: ItemImageChange) {
+async function consumePendingImageUpload(
+  tx: Tx,
+  userId: string,
+  uploadId: string,
+): Promise<string> {
+  const upload = await tx.pendingItemImageUpload.findFirst({
+    where: {
+      id: uploadId,
+      userId,
+      expiresAt: { gt: new Date() },
+    },
+    select: { objectKey: true },
+  });
+  if (!upload) {
+    throw new Error("画像アップロードの有効期限が切れました。画像を選択し直してください。");
+  }
+
+  const consumed = await tx.pendingItemImageUpload.deleteMany({
+    where: { id: uploadId, userId },
+  });
+  if (consumed.count !== 1) {
+    throw new Error("画像アップロードは既に使用されています。画像を選択し直してください。");
+  }
+  return upload.objectKey;
+}
+
+async function imageUpdateData(
+  tx: Tx,
+  userId: string,
+  imageChange: ItemImageChange,
+) {
   switch (imageChange.type) {
     case "keep":
       return {};
     case "remove":
       return { imageUrl: null };
     case "replace":
-      return { imageUrl: imageChange.key };
+      return {
+        imageUrl: await consumePendingImageUpload(
+          tx,
+          userId,
+          imageChange.uploadId,
+        ),
+      };
   }
 }
 
@@ -30,9 +66,12 @@ export function createPrismaItemWriteRepository(
   runWithUser: UserTransactionRunner,
 ): ItemWriteRepository {
   return {
-    async create(userId, input, imageKey) {
+    async create(userId, input, imageUploadId) {
       return runWithUser(userId, async (tx) => {
         const categoryIds = await resolveCategoryIds(tx, input, userId);
+        const imageKey = imageUploadId
+          ? await consumePendingImageUpload(tx, userId, imageUploadId)
+          : null;
         const row = await tx.item.create({
           data: {
             userId,
@@ -65,6 +104,7 @@ export function createPrismaItemWriteRepository(
         if (!existing) return { type: "not_found" };
 
         const categoryIds = await resolveCategoryIds(tx, input, userId);
+        const imageData = await imageUpdateData(tx, userId, imageChange);
 
         await syncItemListing(tx, itemId, input);
         await tx.item.updateMany({
@@ -77,7 +117,7 @@ export function createPrismaItemWriteRepository(
             notes: input.notes,
             actualPrice: input.actualPrice,
             purchasedAt: input.purchasedAt ? new Date(input.purchasedAt) : null,
-            ...imageUpdateData(imageChange),
+            ...imageData,
           },
         });
         await syncItemCategories(tx, itemId, categoryIds);

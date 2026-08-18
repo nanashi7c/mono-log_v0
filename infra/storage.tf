@@ -28,6 +28,22 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "item_images" {
   }
 }
 
+# 画像本体はアプリサーバーを経由せず、短命な署名付きPOSTでブラウザから直接送信する。
+resource "aws_s3_bucket_cors_configuration" "item_images" {
+  bucket = aws_s3_bucket.item_images.id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["POST"]
+    allowed_origins = concat(
+      ["https://${aws_cloudfront_distribution.app.domain_name}"],
+      var.s3_upload_allowed_origins,
+    )
+    expose_headers  = ["ETag"]
+    max_age_seconds = 300
+  }
+}
+
 # アプリが読むバケット名をSSMに保存（非機密なのでString。EC2が S3_IMAGE_BUCKET として読む）
 resource "aws_ssm_parameter" "s3_bucket" {
   name  = "/${var.project_name}/s3/bucket"

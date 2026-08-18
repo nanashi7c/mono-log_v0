@@ -26,7 +26,7 @@
 | 認証 | Amazon Cognito（JWT 発行・`aws-jwt-verify` で検証・httpOnly Cookie・middleware で自動更新） |
 | DB | RDS PostgreSQL。**Prisma Client**（クエリ）/ **Prisma Migrate**（DDL・RLS・seed の手書きSQL） |
 | 認可 | 非所有者ロール `monolog_app` で接続し、トランザクション内 `set_config('app.current_user_id', …)` で **行レベルセキュリティ(RLS)** |
-| 画像 | S3（非公開）＋ 署名付き URL |
+| 画像 | S3（非公開）＋ 署名付き GET / POST。画像本体はブラウザからS3へ直接送信 |
 | API | 外部向け REST `/api/v1`（Cognito の Bearer トークン認証） |
 | ホスティング | EC2 + Docker + CloudFront。IaC は **Terraform**。ローカルは Docker の PostgreSQL |
 
@@ -233,7 +233,7 @@ src/
     auth/cognito.ts       Cognito SDK ラッパ + JWT 検証
     auth/session.ts       httpOnly Cookie でトークン保持
     auth/api.ts           REST API の Bearer 認証ヘルパ
-    image.ts              S3 への保存/削除/署名付き URL
+    image.ts              S3 の削除/存在確認/署名付き GET・POST
     listing-calc.ts       出品の損益計算
     format.ts             表示整形
   types/item.ts           アプリ共通の型
@@ -244,7 +244,8 @@ infra/                    Terraform（VPC/Cognito/RDS/S3/ECR/EC2/CloudFront/SSM/
 
 - アプリは **非所有者ロール `monolog_app`** で DB に接続し、各操作を `withUser(sub, fn)`（トランザクション内 `set_config(..., true)`）で包む。RLS ポリシーは `user_id = app.current_user_id()` で**自分の行だけ**に制限（オブジェクトレベル認可）。
 - 認証は **Cognito**。ID トークンは **JWKS** で署名検証し、トークンは httpOnly Cookie に保存。失効時は middleware が自動リフレッシュ。
-- 画像は**非公開 S3** ＋ 署名付き URL（直リンク不可）。
+- 画像は**非公開 S3**。表示は署名付き GET、送信は形式・10MB上限・5分期限を持つ署名付き POST を使う。画像本体はアプリサーバーを経由しない。
+- 画像選択時にユーザー専用の `pending_item_image_uploads` を作り、アイテム保存とpending消費を同じDBトランザクションで確定する。DB保存に失敗した画像はpendingのまま残り、期限後の次回アップロード準備時にS3から削除する。
 - 本番 DB 接続は **SSL 必須**（`sslmode=require`）。EC2 は IAM ロールで最小権限（SSM 読取 / S3 オブジェクト RW / Cognito `AdminGetUser`）。機密は SSM Parameter Store（SecureString）で管理し、コードに秘密を書かない。
 
 ## 既知の制限

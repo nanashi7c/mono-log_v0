@@ -219,6 +219,21 @@
   cursor: pointer;
 }
 
+.imageUploadStatus,
+.imageUploadError {
+  min-height: 1.25rem;
+  margin: 0.25rem 0 0;
+  font-size: 0.75rem;
+}
+
+.imageUploadStatus {
+  color: var(--slate-500);
+}
+
+.imageUploadError {
+  color: var(--rose-700);
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -244,6 +259,12 @@
 
 .submit:hover {
   background-color: var(--brand-600);
+}
+
+.submit:disabled,
+.delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .delete {

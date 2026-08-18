@@ -1,9 +1,10 @@
 import {
   S3Client,
   GetObjectCommand,
-  PutObjectCommand,
+  HeadObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
+import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const BUCKET = process.env.S3_IMAGE_BUCKET!;
@@ -26,15 +27,46 @@ export async function signedImageUrl(key: string | null | undefined): Promise<st
   }
 }
 
-// 画像を S3 に保存する。
-export async function putImage(
-  key: string,
-  body: Buffer | Uint8Array,
-  contentType?: string,
-): Promise<void> {
-  await s3.send(
-    new PutObjectCommand({ Bucket: BUCKET, Key: key, Body: body, ContentType: contentType }),
-  );
+export async function createSignedImageUpload(input: {
+  key: string;
+  contentType: string;
+  maxBytes: number;
+  expiresInSeconds: number;
+}): Promise<Readonly<{ url: string; fields: Readonly<Record<string, string>> }>> {
+  const result = await createPresignedPost(s3, {
+    Bucket: BUCKET,
+    Key: input.key,
+    Conditions: [
+      ["content-length-range", 1, input.maxBytes],
+      ["eq", "$Content-Type", input.contentType],
+    ],
+    Fields: {
+      "Content-Type": input.contentType,
+    },
+    Expires: input.expiresInSeconds,
+  });
+  return Object.freeze({
+    url: result.url,
+    fields: Object.freeze({ ...result.fields }),
+  });
+}
+
+export async function inspectImage(key: string): Promise<Readonly<{
+  contentType: string | null;
+  size: number | null;
+}> | null> {
+  try {
+    const result = await s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
+    return Object.freeze({
+      contentType: result.ContentType ?? null,
+      size: result.ContentLength ?? null,
+    });
+  } catch (error) {
+    const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+      ?.httpStatusCode;
+    if (status === 404) return null;
+    throw error;
+  }
 }
 
 // 画像を S3 から削除する。
