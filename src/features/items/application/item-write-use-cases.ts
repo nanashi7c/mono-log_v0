@@ -1,7 +1,6 @@
 import type { ItemWriteInput } from "@/features/items/application/item-write-input";
 import type {
   ItemImageChange,
-  ItemDeleteResult,
   ItemImageFile,
   ItemImageStore,
   ItemUpdateResult,
@@ -26,11 +25,6 @@ export type UpdateItemCommand = Readonly<{
   input: ItemWriteInput;
   image: ItemImageFile | null;
   deleteImage: boolean;
-}>;
-
-export type DeleteItemCommand = Readonly<{
-  userId: string;
-  itemId: number;
 }>;
 
 function reportCleanupError(
@@ -131,19 +125,4 @@ export async function updateItemUseCase(
     }
     throw error;
   }
-}
-
-export async function deleteItemUseCase(
-  dependencies: ItemWriteDependencies,
-  command: DeleteItemCommand,
-): Promise<ItemDeleteResult> {
-  const result = await dependencies.repository.delete(
-    command.userId,
-    command.itemId,
-  );
-
-  if (result.type === "deleted" && result.previousImageKey) {
-    await removeImageBestEffort(dependencies, result.previousImageKey);
-  }
-  return result;
 }

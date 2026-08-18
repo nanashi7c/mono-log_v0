@@ -32,6 +32,9 @@ vi.mock("@/features/items/adapters/parse-item-form", () => ({
 vi.mock("@/features/items/application/item-write-use-cases", () => ({
   createItemUseCase: mocks.createItemUseCase,
   updateItemUseCase: mocks.updateItemUseCase,
+}));
+
+vi.mock("@/features/items/application/item-delete-use-case", () => ({
   deleteItemUseCase: mocks.deleteItemUseCase,
 }));
 
@@ -39,6 +42,13 @@ vi.mock(
   "@/features/items/infrastructure/prisma-item-write-repository",
   () => ({
     prismaItemWriteRepository: {},
+  }),
+);
+
+vi.mock(
+  "@/features/items/infrastructure/prisma-item-delete-repository",
+  () => ({
+    prismaItemDeleteRepository: {},
   }),
 );
 

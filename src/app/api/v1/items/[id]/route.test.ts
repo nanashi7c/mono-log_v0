@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   updateApiItemUseCase: vi.fn(),
   loadApiItemUseCase: vi.fn(),
+  deleteItemUseCase: vi.fn(),
   getApiUser: vi.fn(),
   unauthorized: vi.fn(() =>
     Response.json({ error: "unauthorized" }, { status: 401 }),
@@ -27,6 +28,10 @@ vi.mock("@/features/items/application/item-api-query-use-cases", () => ({
   loadApiItemUseCase: mocks.loadApiItemUseCase,
 }));
 
+vi.mock("@/features/items/application/item-delete-use-case", () => ({
+  deleteItemUseCase: mocks.deleteItemUseCase,
+}));
+
 vi.mock("@/features/items/infrastructure/prisma-item-api-command-repository", () => ({
   prismaItemApiCommandRepository: {},
 }));
@@ -35,8 +40,13 @@ vi.mock("@/features/items/infrastructure/prisma-item-api-query-repository", () =
   prismaItemApiQueryRepository: {},
 }));
 
-vi.mock("@/db/client", () => ({ withUser: vi.fn() }));
-vi.mock("@/lib/image", () => ({ deleteImage: vi.fn() }));
+vi.mock("@/features/items/infrastructure/prisma-item-delete-repository", () => ({
+  prismaItemDeleteRepository: {},
+}));
+
+vi.mock("@/features/items/infrastructure/s3-item-image-store", () => ({
+  s3ItemImageStore: {},
+}));
 
 vi.mock("@/lib/auth/api", () => ({
   getApiUser: mocks.getApiUser,
@@ -46,7 +56,7 @@ vi.mock("@/lib/auth/api", () => ({
   dbErrorResponse: mocks.dbErrorResponse,
 }));
 
-import { GET, PUT } from "@/app/api/v1/items/[id]/route";
+import { DELETE, GET, PUT } from "@/app/api/v1/items/[id]/route";
 
 const request = new NextRequest("http://localhost/api/v1/items/1");
 const item = Object.freeze({
@@ -72,6 +82,10 @@ beforeEach(() => {
   mocks.getApiUser.mockResolvedValue({ sub: "user-1", email: "user@example.com" });
   mocks.loadApiItemUseCase.mockResolvedValue(item);
   mocks.updateApiItemUseCase.mockResolvedValue({ status: "updated", item });
+  mocks.deleteItemUseCase.mockResolvedValue({
+    type: "deleted",
+    previousImageKey: null,
+  });
 });
 
 describe("GET /api/v1/items/:id", () => {
@@ -234,6 +248,55 @@ describe("PUT /api/v1/items/:id", () => {
       putRequest('{"name":"Updated camera"}'),
       context("1"),
     );
+
+    expect(response.status).toBe(500);
+    expect(mocks.dbErrorResponse).toHaveBeenCalledWith(error);
+  });
+});
+
+describe("DELETE /api/v1/items/:id", () => {
+  it("returns 401 when authentication fails", async () => {
+    mocks.getApiUser.mockResolvedValue(null);
+
+    const response = await DELETE(request, context("1"));
+
+    expect(response.status).toBe(401);
+    expect(mocks.deleteItemUseCase).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for an invalid id", async () => {
+    const response = await DELETE(request, context("0"));
+
+    expect(response.status).toBe(400);
+    expect(mocks.badRequest).toHaveBeenCalledWith("invalid id");
+    expect(mocks.deleteItemUseCase).not.toHaveBeenCalled();
+  });
+
+  it("deletes an item and returns an empty 204 response", async () => {
+    const response = await DELETE(request, context("1"));
+
+    expect(mocks.deleteItemUseCase).toHaveBeenCalledWith(expect.anything(), {
+      userId: "user-1",
+      itemId: 1,
+    });
+    expect(response.status).toBe(204);
+    await expect(response.text()).resolves.toBe("");
+  });
+
+  it("returns 404 when the item is not visible", async () => {
+    mocks.deleteItemUseCase.mockResolvedValue({ type: "not_found" });
+
+    const response = await DELETE(request, context("1"));
+
+    expect(response.status).toBe(404);
+    expect(mocks.jsonError).toHaveBeenCalledWith(404, "not found");
+  });
+
+  it("converts database failures to the shared database response", async () => {
+    const error = new Error("database failure");
+    mocks.deleteItemUseCase.mockRejectedValue(error);
+
+    const response = await DELETE(request, context("1"));
 
     expect(response.status).toBe(500);
     expect(mocks.dbErrorResponse).toHaveBeenCalledWith(error);

@@ -109,7 +109,7 @@ afterAll(async () => {
 });
 
 describe("prismaItemWriteRepository", () => {
-  it("作成・更新・削除を通して関連データと画像キーを同期する", async () => {
+  it("作成・更新を通して関連データと画像キーを同期する", async () => {
     const userId = await createTestUser("write-flow");
     const plannedInput: ItemWriteInput = {
       ...ownedInput("planned item"),
@@ -181,15 +181,6 @@ describe("prismaItemWriteRepository", () => {
       plan: null,
     });
     expect(updated?.listing?.sellingPrice?.toNumber()).toBe(15_000);
-
-    const deleteResult = await repository.delete(userId, itemId);
-    expect(deleteResult).toEqual({
-      type: "deleted",
-      previousImageKey: "new-image.png",
-    });
-    await expect(
-      admin.item.findUnique({ where: { id: BigInt(itemId) } }),
-    ).resolves.toBeNull();
   });
 
   it("DB制約違反時は先に作成したカテゴリもロールバックする", async () => {
@@ -210,7 +201,7 @@ describe("prismaItemWriteRepository", () => {
     ).resolves.toBeNull();
   });
 
-  it("他ユーザーのアイテムを更新・削除できない", async () => {
+  it("他ユーザーのアイテムを更新できない", async () => {
     const ownerId = await createTestUser("owner");
     const intruderId = await createTestUser("intruder");
     const itemId = await repository.create(
@@ -225,13 +216,11 @@ describe("prismaItemWriteRepository", () => {
       ownedInput("changed by intruder"),
       { type: "remove" },
     );
-    const deleteResult = await repository.delete(intruderId, itemId);
     const persisted = await admin.item.findUnique({
       where: { id: BigInt(itemId) },
     });
 
     expect(updateResult).toEqual({ type: "not_found" });
-    expect(deleteResult).toEqual({ type: "not_found" });
     expect(persisted).toMatchObject({
       userId: ownerId,
       name: "owner item",
