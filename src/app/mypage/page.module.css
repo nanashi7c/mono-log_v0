@@ -62,6 +62,7 @@
   font-size: 0.875rem;
   color: var(--slate-700);
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .note {
@@ -116,7 +117,7 @@
 
 .grid2 {
   display: grid;
-  grid-template-columns: 8rem 1fr;
+  grid-template-columns: minmax(10.5rem, auto) minmax(0, 1fr);
   gap: 0.5rem 1rem;
   font-size: 0.875rem;
 }

@@ -110,7 +110,7 @@ VPC 10.0.0.0/16
 | 商品画像 | S3（非公開） | `<userId>/<itemId>/<時刻>.<ext>` を署名付きURLで配布 |
 
 - パスワードは Terraform の `random_password` で生成し SSM(`SecureString`)へ。コードに秘密を書かない。
-- EC2 は IAM ロールで `/mono-log/*` の SSM 読取＋（SSM経由限定の）KMS 復号、S3 オブジェクト RW、Cognito `AdminGetUser` のみを最小権限で許可。
+- EC2 は IAM ロールで `/mono-log/*` の SSM 読取＋（SSM経由限定の）KMS 復号、S3 オブジェクト RW のみを最小権限で許可。
 
 ---
 

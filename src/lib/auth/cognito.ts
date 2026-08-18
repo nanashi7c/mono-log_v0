@@ -5,14 +5,12 @@ import {
   InitiateAuthCommand,
   ChangePasswordCommand,
   DeleteUserCommand,
-  AdminGetUserCommand,
   UpdateUserAttributesCommand,
   VerifyUserAttributeCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { CognitoJwtVerifier } from "aws-jwt-verify";
 
 const region = process.env.AWS_REGION!;
-const userPoolId = process.env.COGNITO_USER_POOL_ID!;
 const clientId = process.env.COGNITO_CLIENT_ID!;
 
 const client = new CognitoIdentityProviderClient({ region });
@@ -153,16 +151,4 @@ export async function verifyEmailUpdate(
       Code: code,
     }),
   );
-}
-
-// 登録日時を取得（admin API。権限が無い等で失敗したら null）
-export async function getUserCreatedAt(username: string): Promise<string | null> {
-  try {
-    const res = await client.send(
-      new AdminGetUserCommand({ UserPoolId: userPoolId, Username: username }),
-    );
-    return res.UserCreateDate ? res.UserCreateDate.toISOString() : null;
-  } catch {
-    return null;
-  }
 }

@@ -82,14 +82,12 @@ import {
   InitiateAuthCommand,
   ChangePasswordCommand,
   DeleteUserCommand,
-  AdminGetUserCommand,
   UpdateUserAttributesCommand,
   VerifyUserAttributeCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
 import { CognitoJwtVerifier } from "aws-jwt-verify";
 
 const region = process.env.AWS_REGION!;
-const userPoolId = process.env.COGNITO_USER_POOL_ID!;
 const clientId = process.env.COGNITO_CLIENT_ID!;
 
 const client = new CognitoIdentityProviderClient({ region });
@@ -221,22 +219,11 @@ export async function verifyEmailUpdate(
   );
 }
 
-// 登録日時を取得（admin API。失敗したら null）
-export async function getUserCreatedAt(username: string): Promise<string | null> {
-  try {
-    const res = await client.send(
-      new AdminGetUserCommand({ UserPoolId: userPoolId, Username: username }),
-    );
-    return res.UserCreateDate ? res.UserCreateDate.toISOString() : null;
-  } catch {
-    return null;
-  }
-}
 ```
 **逐行解説**
 - `import { ... } from "@aws-sdk/client-cognito-identity-provider"`: 1操作=1コマンドクラス。
 - `import { CognitoJwtVerifier } from "aws-jwt-verify"`: JWT検証(公開鍵JWKSを自動取得)。
-- `const region/userPoolId/clientId = process.env...!`: 環境変数(`!`はnull非許容の断言)。
+- `const region/clientId = process.env...!`: 環境変数(`!`はnull非許容の断言)。
 - `const client = new CognitoIdentityProviderClient({ region })`: SDKクライアント。
 - `let idVerifier = ... | null` + `getIdVerifier()`: **遅延生成**。ビルド時はenv不在で`create()`が落ちるため初回利用時に作る。`tokenUse:"id"`=IDトークン検証。
 - `AuthTokens`型: ID/アクセス/リフレッシュの3トークン。
@@ -248,7 +235,6 @@ export async function getUserCreatedAt(username: string): Promise<string | null>
 - `changePassword`: `ChangePasswordCommand`(現/新パスワード)。現パスワード誤りは例外。
 - `deleteOwnUser`: `DeleteUserCommand`で退会。
 - `requestEmailUpdate`/`verifyEmailUpdate`: メール変更申請＋確認コード検証。
-- `getUserCreatedAt`: `AdminGetUserCommand`で登録日時。失敗は`try/catch`で`null`。
 
 ---
 

@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
-import { getUserCreatedAt } from "@/lib/auth/cognito";
-import { withUser } from "@/db/client";
+import { loadUserProfileUseCase } from "@/features/users/application/user-profile-query-use-cases";
+import { prismaUserProfileQueryRepository } from "@/features/users/infrastructure/prisma-user-profile-query-repository";
 import {
   changePassword,
   confirmEmailChange,
@@ -12,6 +12,10 @@ import {
 import styles from "./page.module.css";
 
 export const dynamic = "force-dynamic";
+
+const userProfileQueryDependencies = {
+  repository: prismaUserProfileQueryRepository,
+};
 
 const ERROR_MESSAGES: Record<string, string> = {
   "username-required": "ユーザー名を入力してください。",
@@ -52,11 +56,12 @@ export default async function MyPage({
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const profile = await withUser(user.sub, (tx) =>
-    tx.user.findUnique({ where: { id: user.sub }, select: { username: true } }),
+  const profile = await loadUserProfileUseCase(
+    userProfileQueryDependencies,
+    { userId: user.sub },
   );
   const username = profile?.username ?? "";
-  const createdAt = await getUserCreatedAt(user.email);
+  const createdAt = profile?.createdAt ?? null;
   const lastSignIn = user.authTime != null ? new Date(user.authTime * 1000).toISOString() : null;
   // 退会は Cognito のセルフサービスで常に可能。
   const adminConfigured = true;
@@ -74,11 +79,9 @@ export default async function MyPage({
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>アカウント情報</h2>
         <dl className={styles.grid2}>
-          <dt className={styles.gridLabel}>ユーザー ID</dt>
-          <dd className={styles.readonly}>{user.sub}</dd>
-          <dt className={styles.gridLabel}>メール</dt>
+          <dt className={styles.gridLabel}>ログインID（メールアドレス）</dt>
           <dd className={styles.readonly}>{user.email}</dd>
-          <dt className={styles.gridLabel}>登録日時</dt>
+          <dt className={styles.gridLabel}>利用開始日</dt>
           <dd className={styles.readonly}>{formatDateTime(createdAt)}</dd>
           <dt className={styles.gridLabel}>最終ログイン</dt>
           <dd className={styles.readonly}>{formatDateTime(lastSignIn)}</dd>
