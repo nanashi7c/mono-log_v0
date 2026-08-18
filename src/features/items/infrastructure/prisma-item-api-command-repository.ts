@@ -8,17 +8,25 @@ export type ItemApiCommandTransactionRunner = <T>(
   operation: (tx: Tx) => Promise<T>,
 ) => Promise<T>;
 
+async function insertItemCategories(
+  tx: Tx,
+  itemId: bigint,
+  categoryIds: readonly number[],
+): Promise<void> {
+  if (categoryIds.length === 0) return;
+
+  await tx.itemCategory.createMany({
+    data: categoryIds.map((categoryId) => ({ itemId, categoryId })),
+  });
+}
+
 async function replaceItemCategories(
   tx: Tx,
   itemId: bigint,
   categoryIds: readonly number[],
 ): Promise<void> {
   await tx.itemCategory.deleteMany({ where: { itemId } });
-  if (categoryIds.length === 0) return;
-
-  await tx.itemCategory.createMany({
-    data: categoryIds.map((categoryId) => ({ itemId, categoryId })),
-  });
+  await insertItemCategories(tx, itemId, categoryIds);
 }
 
 export function createPrismaItemApiCommandRepository(
@@ -51,7 +59,7 @@ export function createPrismaItemApiCommandRepository(
               : null,
           },
         });
-        await replaceItemCategories(tx, row.id, input.categoryIds);
+        await insertItemCategories(tx, row.id, input.categoryIds);
 
         return toItemApiData(toItem(row), input.categoryIds);
       });
