@@ -71,7 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getApiUser.mockResolvedValue({ sub: "user-1", email: "user@example.com" });
   mocks.loadApiItemUseCase.mockResolvedValue(item);
-  mocks.updateApiItemUseCase.mockResolvedValue(item);
+  mocks.updateApiItemUseCase.mockResolvedValue({ status: "updated", item });
 });
 
 describe("GET /api/v1/items/:id", () => {
@@ -198,7 +198,7 @@ describe("PUT /api/v1/items/:id", () => {
   });
 
   it("returns 404 when the item is not visible", async () => {
-    mocks.updateApiItemUseCase.mockResolvedValue(null);
+    mocks.updateApiItemUseCase.mockResolvedValue({ status: "not_found" });
 
     const response = await PUT(
       putRequest('{"name":"Updated camera"}'),
@@ -207,6 +207,23 @@ describe("PUT /api/v1/items/:id", () => {
 
     expect(response.status).toBe(404);
     expect(mocks.jsonError).toHaveBeenCalledWith(404, "not found");
+  });
+
+  it("returns 400 without disclosing an unavailable category", async () => {
+    mocks.updateApiItemUseCase.mockResolvedValue({
+      status: "invalid_categories",
+    });
+
+    const response = await PUT(
+      putRequest('{"name":"Updated camera","category_ids":[999]}'),
+      context("1"),
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.badRequest).toHaveBeenCalledWith("invalid category_ids");
+    await expect(response.json()).resolves.toEqual({
+      error: "invalid category_ids",
+    });
   });
 
   it("converts command failures to the shared database response", async () => {

@@ -58,13 +58,18 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!parsed.ok) return badRequest(parsed.error);
 
   try {
-    const item = await updateApiItemUseCase(itemApiCommandDependencies, {
+    const result = await updateApiItemUseCase(itemApiCommandDependencies, {
       userId: user.sub,
       itemId: id,
       input: parsed.value,
     });
-    if (!item) return jsonError(404, "not found");
-    return NextResponse.json({ item });
+    if (result.status === "not_found") {
+      return jsonError(404, "not found");
+    }
+    if (result.status === "invalid_categories") {
+      return badRequest("invalid category_ids");
+    }
+    return NextResponse.json({ item: result.item });
   } catch (e) {
     return dbErrorResponse(e);
   }

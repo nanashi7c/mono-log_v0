@@ -12,11 +12,17 @@ export type ItemApiQueryTransactionRunner = <T>(
 async function categoryIdsByItem(
   tx: Tx,
   itemIds: readonly number[],
+  userId: string,
 ): Promise<Map<number, readonly number[]>> {
   if (itemIds.length === 0) return new Map();
 
   const links = await tx.itemCategory.findMany({
-    where: { itemId: { in: itemIds.map((itemId) => BigInt(itemId)) } },
+    where: {
+      itemId: { in: itemIds.map((itemId) => BigInt(itemId)) },
+      category: {
+        is: { OR: [{ isPreset: true }, { userId }] },
+      },
+    },
     select: { itemId: true, categoryId: true },
   });
   const mutableIdsByItem = new Map<number, number[]>();
@@ -45,7 +51,7 @@ export function createPrismaItemApiQueryRepository(
           where: { deletedAt: null, ...(status ? { status } : {}) },
         });
         const itemIds = rows.map((row) => Number(row.id));
-        const categoryIds = await categoryIdsByItem(tx, itemIds);
+        const categoryIds = await categoryIdsByItem(tx, itemIds, userId);
 
         return Object.freeze(
           rows.map((row) => {
@@ -64,7 +70,7 @@ export function createPrismaItemApiQueryRepository(
         const row = await tx.item.findFirst({ where: { id: BigInt(itemId) } });
         if (!row) return null;
 
-        const categoryIds = await categoryIdsByItem(tx, [itemId]);
+        const categoryIds = await categoryIdsByItem(tx, [itemId], userId);
         return toItemApiData(
           toItem(row),
           categoryIds.get(itemId) ?? Object.freeze([]),

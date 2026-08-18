@@ -116,6 +116,9 @@ curl -s -X POST "$BASE/items" \
 ```
 レスポンス `201`: `{ "item": { ... } }`
 
+`category_ids`に指定できるのは、プリセットカテゴリまたは認証ユーザー自身が作成したカテゴリだけです。存在しないIDや他ユーザーの非公開カテゴリIDを含む場合は、存在・所有者を区別せず`400 { "error": "invalid category_ids" }`を返し、商品は作成しません。
+過去のデータに利用できないカテゴリとの関連が残っていても、そのIDはGETレスポンスへ含めません。
+
 ### GET /items/{id}
 ```bash
 curl -s "$BASE/items/12" -H "Authorization: Bearer $TOKEN"
@@ -129,7 +132,7 @@ curl -s -X PUT "$BASE/items/12" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"改名","status":"listed","quantity":2,"category_ids":[3]}'
 ```
-`200`: `{ "item": { ... } }` / 無ければ `404`
+`200`: `{ "item": { ... } }` / 無ければ `404`。利用できない`category_ids`を含む場合は`400`となり、商品本体と既存カテゴリは変更されません。
 
 ### DELETE /items/{id}
 ```bash

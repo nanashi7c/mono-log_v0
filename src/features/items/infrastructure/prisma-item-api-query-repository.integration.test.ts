@@ -76,6 +76,13 @@ describe("prismaItemApiQueryRepository", () => {
     const category = await admin.category.create({
       data: { userId, name: "API query category", color: "#123456" },
     });
+    const hiddenCategory = await admin.category.create({
+      data: {
+        userId: otherUserId,
+        name: "API query hidden category",
+        color: "#abcdef",
+      },
+    });
     const owned = await admin.item.create({
       data: { userId, status: "owned", name: "owned item", quantity: 1 },
     });
@@ -102,6 +109,9 @@ describe("prismaItemApiQueryRepository", () => {
     });
     await admin.itemCategory.create({
       data: { itemId: owned.id, categoryId: category.id },
+    });
+    await admin.itemCategory.create({
+      data: { itemId: owned.id, categoryId: hiddenCategory.id },
     });
 
     const all = await repository.findMany(userId, null);

@@ -28,13 +28,17 @@ const admin = new PrismaClient({
 const app = new PrismaClient({
   datasourceUrl: localDatabaseUrl("TEST_APP_DATABASE_URL", LOCAL_APP_DATABASE_URL),
 });
-const repository = createPrismaItemApiCommandRepository(
-  async <T>(userId: string, operation: (tx: Tx) => Promise<T>) =>
-    app.$transaction(async (tx) => {
-      await tx.$executeRaw`select set_config('app.current_user_id', ${userId}, true)`;
-      return operation(tx);
-    }),
-);
+async function runWithAppUser<T>(
+  userId: string,
+  operation: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  return app.$transaction(async (tx) => {
+    await tx.$executeRaw`select set_config('app.current_user_id', ${userId}, true)`;
+    return operation(tx);
+  });
+}
+
+const repository = createPrismaItemApiCommandRepository(runWithAppUser);
 const testUserIds = new Set<string>();
 const testPresetCategoryIds = new Set<number>();
 
@@ -102,9 +106,13 @@ describe("prismaItemApiCommandRepository", () => {
       { userId, email: "api-only@example.com" },
       apiInput("API item", { actualPrice: 12_000 }),
     );
+    if (result.status !== "created") {
+      throw new Error(`unexpected create result: ${result.status}`);
+    }
+    const createdItem = result.item;
     const user = await admin.user.findUnique({ where: { id: userId } });
     const persisted = await admin.item.findUnique({
-      where: { id: BigInt(result.id) },
+      where: { id: BigInt(createdItem.id) },
     });
 
     expect(user).toMatchObject({
@@ -116,14 +124,15 @@ describe("prismaItemApiCommandRepository", () => {
       name: "API item",
       actualPrice: 12_000,
     });
-    expect(result).toMatchObject({
+    expect(createdItem).toMatchObject({
       id: Number(persisted?.id),
       user_id: userId,
       name: "API item",
       category_ids: [],
     });
     expect(Object.isFrozen(result)).toBe(true);
-    expect(Object.isFrozen(result.category_ids)).toBe(true);
+    expect(Object.isFrozen(createdItem)).toBe(true);
+    expect(Object.isFrozen(createdItem.category_ids)).toBe(true);
   });
 
   it("updates only API fields and categories while preserving image, plan, and listing", async () => {
@@ -169,6 +178,10 @@ describe("prismaItemApiCommandRepository", () => {
       Number(item.id),
       apiInput("intruder update"),
     );
+    if (result.status !== "updated") {
+      throw new Error(`unexpected update result: ${result.status}`);
+    }
+    const updatedItem = result.item;
     const persisted = await admin.item.findUnique({
       where: { id: item.id },
       include: {
@@ -178,7 +191,7 @@ describe("prismaItemApiCommandRepository", () => {
       },
     });
 
-    expect(result).toMatchObject({
+    expect(updatedItem).toMatchObject({
       id: Number(item.id),
       status: "sold",
       name: "after update",
@@ -187,9 +200,10 @@ describe("prismaItemApiCommandRepository", () => {
       category_ids: [newCategory.id],
     });
     expect(Object.isFrozen(result)).toBe(true);
-    expect(Object.isFrozen(result?.category_ids)).toBe(true);
-    expect(result?.category_ids).not.toBe(updateInput.categoryIds);
-    expect(hidden).toBeNull();
+    expect(Object.isFrozen(updatedItem)).toBe(true);
+    expect(Object.isFrozen(updatedItem.category_ids)).toBe(true);
+    expect(updatedItem.category_ids).not.toBe(updateInput.categoryIds);
+    expect(hidden).toEqual({ status: "not_found" });
     expect(persisted).toMatchObject({
       status: "sold",
       name: "after update",
@@ -198,6 +212,133 @@ describe("prismaItemApiCommandRepository", () => {
       itemCategories: [{ categoryId: newCategory.id }],
     });
     expect(persisted?.listing?.sellingPrice?.toNumber()).toBe(15_000);
+  });
+
+  it("accepts categories owned by the user and preset categories", async () => {
+    const userId = await createTestUser("api-category-owner");
+    const ownCategory = await admin.category.create({
+      data: { userId, name: "own category" },
+    });
+    const presetCategory = await admin.category.create({
+      data: {
+        userId: null,
+        name: `api-command-visible-preset-${randomUUID()}`,
+        isPreset: true,
+      },
+    });
+    testPresetCategoryIds.add(presetCategory.id);
+
+    const result = await repository.create(
+      { userId, email: "api-category-owner@example.com" },
+      apiInput("visible categories", {
+        categoryIds: Object.freeze([ownCategory.id, presetCategory.id]),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "created",
+      item: {
+        category_ids: [ownCategory.id, presetCategory.id],
+      },
+    });
+  });
+
+  it("rejects another user's private category without creating API user or item", async () => {
+    const otherUserId = await createTestUser("api-category-other");
+    const privateCategory = await admin.category.create({
+      data: { userId: otherUserId, name: "private category" },
+    });
+    const apiUserId = randomUUID();
+    testUserIds.add(apiUserId);
+
+    const result = await repository.create(
+      { userId: apiUserId, email: "invalid-category@example.com" },
+      apiInput("must not be created", {
+        categoryIds: Object.freeze([privateCategory.id]),
+      }),
+    );
+
+    expect(result).toEqual({ status: "invalid_categories" });
+    await expect(
+      admin.user.findUnique({ where: { id: apiUserId } }),
+    ).resolves.toBeNull();
+    await expect(
+      admin.item.count({ where: { userId: apiUserId } }),
+    ).resolves.toBe(0);
+  });
+
+  it("rejects another user's private category without changing an existing item", async () => {
+    const userId = await createTestUser("api-category-update-owner");
+    const otherUserId = await createTestUser("api-category-update-other");
+    const ownCategory = await admin.category.create({
+      data: { userId, name: "existing category" },
+    });
+    const privateCategory = await admin.category.create({
+      data: { userId: otherUserId, name: "other private category" },
+    });
+    const item = await admin.item.create({
+      data: {
+        userId,
+        status: "owned",
+        name: "before invalid update",
+        quantity: 1,
+      },
+    });
+    await admin.itemCategory.create({
+      data: { itemId: item.id, categoryId: ownCategory.id },
+    });
+
+    const result = await repository.update(
+      userId,
+      Number(item.id),
+      apiInput("must not change", {
+        categoryIds: Object.freeze([privateCategory.id]),
+      }),
+    );
+    const persisted = await admin.item.findUnique({
+      where: { id: item.id },
+      include: { itemCategories: true },
+    });
+
+    expect(result).toEqual({ status: "invalid_categories" });
+    expect(persisted).toMatchObject({
+      name: "before invalid update",
+      itemCategories: [{ categoryId: ownCategory.id }],
+    });
+  });
+
+  it("enforces category ownership in the database policy", async () => {
+    const userId = await createTestUser("api-policy-owner");
+    const otherUserId = await createTestUser("api-policy-other");
+    const item = await admin.item.create({
+      data: {
+        userId,
+        status: "owned",
+        name: "policy protected item",
+        quantity: 1,
+      },
+    });
+    const privateCategory = await admin.category.create({
+      data: { userId: otherUserId, name: "policy private category" },
+    });
+
+    await expect(
+      runWithAppUser(userId, (tx) =>
+        tx.itemCategory.create({
+          data: { itemId: item.id, categoryId: privateCategory.id },
+        }),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      admin.itemCategory.findUnique({
+        where: {
+          itemId_categoryId: {
+            itemId: item.id,
+            categoryId: privateCategory.id,
+          },
+        },
+      }),
+    ).resolves.toBeNull();
   });
 
   it("rolls back user, item, and category writes when category insertion fails", async () => {
