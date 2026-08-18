@@ -225,6 +225,7 @@ src/
     api/export/route.ts   JSON ダウンロード（Cookie 認証）
     api/v1/               外部向け REST API（Bearer 認証）items/categories/export
   components/             UI（item-card / item-form / nav-bar / filter-bar）
+  features/items/         itemsのdomain/application/infrastructure/adapters
   db/
     client.ts             Prisma Client（遅延生成）＋ withUser（RLS コンテキスト実行）
     serialize.ts          Prisma 行（BigInt/Decimal/Date）→ アプリ型（number/文字列）変換
@@ -232,7 +233,6 @@ src/
     auth/cognito.ts       Cognito SDK ラッパ + JWT 検証
     auth/session.ts       httpOnly Cookie でトークン保持
     auth/api.ts           REST API の Bearer 認証ヘルパ
-    api/items.ts          REST API の items 入力検証・整形
     image.ts              S3 への保存/削除/署名付き URL
     listing-calc.ts       出品の損益計算
     format.ts             表示整形

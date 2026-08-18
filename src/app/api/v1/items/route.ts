@@ -6,10 +6,15 @@ import {
   type ItemStatus,
 } from "@/features/items/domain/status";
 import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
+import { loadApiItemsUseCase } from "@/features/items/application/item-api-query-use-cases";
+import { prismaItemApiQueryRepository } from "@/features/items/infrastructure/prisma-item-api-query-repository";
 import { getApiUser, unauthorized, badRequest, dbErrorResponse } from "@/lib/auth/api";
-import { categoryIdsByItem } from "@/lib/api/items";
 
 export const dynamic = "force-dynamic";
+
+const itemApiQueryDependencies = Object.freeze({
+  repository: prismaItemApiQueryRepository,
+});
 
 // GET /api/v1/items?status=owned … 自分のアイテム一覧（RLS で自分の行のみ）。
 export async function GET(req: NextRequest) {
@@ -26,14 +31,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const result = await withUser(user.sub, async (tx) => {
-      const rows = await tx.item.findMany({
-        where: { deletedAt: null, ...(status ? { status } : {}) },
-      });
-      const linkMap = await categoryIdsByItem(tx, rows.map((r) => Number(r.id)));
-      return rows.map((r) => ({ ...toItem(r), category_ids: linkMap.get(Number(r.id)) ?? [] }));
+    const items = await loadApiItemsUseCase(itemApiQueryDependencies, {
+      userId: user.sub,
+      status,
     });
-    return NextResponse.json({ items: result });
+    return NextResponse.json({ items });
   } catch (e) {
     return dbErrorResponse(e);
   }

@@ -2,11 +2,16 @@ import { NextResponse, type NextRequest } from "next/server";
 import { withUser } from "@/db/client";
 import { toItem } from "@/db/serialize";
 import { parseItemApiBody } from "@/features/items/adapters/parse-item-api-body";
+import { loadApiItemUseCase } from "@/features/items/application/item-api-query-use-cases";
+import { prismaItemApiQueryRepository } from "@/features/items/infrastructure/prisma-item-api-query-repository";
 import { deleteImage } from "@/lib/image";
 import { getApiUser, unauthorized, badRequest, jsonError, dbErrorResponse } from "@/lib/auth/api";
-import { categoryIdsByItem } from "@/lib/api/items";
 
 export const dynamic = "force-dynamic";
+
+const itemApiQueryDependencies = Object.freeze({
+  repository: prismaItemApiQueryRepository,
+});
 
 function parseId(raw: string): number | null {
   const n = Number(raw);
@@ -21,14 +26,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (id == null) return badRequest("invalid id");
 
   try {
-    const result = await withUser(user.sub, async (tx) => {
-      const row = await tx.item.findFirst({ where: { id: BigInt(id) } });
-      if (!row) return null;
-      const linkMap = await categoryIdsByItem(tx, [id]);
-      return { ...toItem(row), category_ids: linkMap.get(id) ?? [] };
+    const item = await loadApiItemUseCase(itemApiQueryDependencies, {
+      userId: user.sub,
+      itemId: id,
     });
-    if (!result) return jsonError(404, "not found");
-    return NextResponse.json({ item: result });
+    if (!item) return jsonError(404, "not found");
+    return NextResponse.json({ item });
   } catch (e) {
     return dbErrorResponse(e);
   }

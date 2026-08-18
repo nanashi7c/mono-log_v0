@@ -296,7 +296,7 @@ src/
     import/                … CSV等の取込
     api/export/route.ts    … エクスポートAPI（ブラウザのCookie認証・ダウンロード用）
     api/v1/                 … 外部向けREST API（Cognito Bearer認証）。items/categories/export
-  lib/api/items.ts         … REST APIのitems入力検証・整形（route間で共有）
+  features/items/          … itemsのdomain/application/infrastructure/adapters
   lib/auth/api.ts          … REST APIのBearer認証ヘルパ + JSONエラー応答
   components/              … UI部品（item-card, item-form, nav-bar, filter-bar）
   db/
