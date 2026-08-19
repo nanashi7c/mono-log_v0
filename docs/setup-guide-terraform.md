@@ -811,9 +811,11 @@ resource "aws_instance" "app" {
   vpc_security_group_ids = [aws_security_group.ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
   depends_on = [
+    aws_iam_role_policy.cloudwatch_logs,
     aws_ssm_parameter.cloudfront_origin_verify_secret,
     aws_ssm_parameter.deployed_image_tag,
   ]
+  user_data_replace_on_change = true
   user_data = <<-EOF
 ... (後述の起動スクリプト) ...
 EOF
@@ -834,7 +836,8 @@ EOF
 - `subnet_id = aws_subnet.public_a.id`: publicサブネットに配置(外部到達のため)。
 - `vpc_security_group_ids`: 上のEC2用SGを適用。
 - `iam_instance_profile`: 上のプロファイル＝ロールを付与。
-- `depends_on`: オリジン検証秘密値と配備タグ用SSMパラメータが作られてからEC2を起動し、初回の設定取得失敗を防ぐ。
+- `depends_on`: CloudWatch Logs書込権限、オリジン検証秘密値、配備タグ用SSMパラメータが揃ってからEC2を起動し、初回の設定・ログ転送失敗を防ぐ。
+- `user_data_replace_on_change = true`: 起動時スクリプトを変更したら、停止・再開だけで済ませずEC2を再作成して新しい設定を確実に適用する。EC2は永続データを持たず、データはRDS・S3・Cognitoへ分離しているため置換可能。
 - `user_data = <<-EOF ... EOF`: **起動時に1回だけ走るシェルスクリプト**(下で詳説)。`<<-EOF`はヒアドキュメント(複数行文字列)。
 - `metadata_options { http_tokens = "required" }`: IMDSv2を強制(認証情報の盗用対策)。
 - `root_block_device { volume_size = 30; volume_type = "gp3"; encrypted = true }`: ルートディスク30GB(最新AL2023 AMIのスナップショットが30GBのため20では作成失敗)・gp3・暗号化。
@@ -843,13 +846,52 @@ EOF
 ```bash
 #!/bin/bash
 set -euo pipefail
-dnf install -y docker
+dnf install -y docker amazon-cloudwatch-agent
+
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'DOCKERCONFIG'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+DOCKERCONFIG
 systemctl enable --now docker
+
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWAGENT'
+{
+  "agent": {
+    "region": "${var.aws_region}"
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/lib/docker/containers/*/*-json.log",
+            "log_group_name": "${aws_cloudwatch_log_group.application.name}",
+            "log_stream_name": "{instance_id}/application"
+          }
+        ]
+      }
+    }
+  }
+}
+CWAGENT
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 -s \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+systemctl enable amazon-cloudwatch-agent
 ```
 - `#!/bin/bash`: bashで実行。
 - `set -euo pipefail`: エラーで停止(`-e`)・未定義変数で停止(`-u`)・パイプ失敗も検知(`pipefail`)。安全実行の定番。
-- `dnf install -y docker`: Dockerを導入(`-y`で確認なし)。
+- `dnf install -y docker amazon-cloudwatch-agent`: DockerとCloudWatch Agentを導入(`-y`で確認なし)。
+- `/etc/docker/daemon.json`: `docker logs`を維持しながら、ローカルログを1ファイル10MB・最大3ファイルに制限してディスクの無制限消費を防ぐ。
 - `systemctl enable --now docker`: Dockerを起動＋自動起動有効化。
+- `amazon-cloudwatch-agent.json`: Dockerの現在のJSONログを、`/mono-log/application`のEC2インスタンス別ストリームへ転送する設定。
+- `amazon-cloudwatch-agent-ctl ... -s`: 設定を読み込み、Agentを起動する。続く`systemctl enable`でEC2再起動時の自動起動も明示的に有効化する。
 
 ```bash
 cat > /etc/mono-log.env <<ENV
@@ -922,11 +964,51 @@ systemctl enable --now mono-log.service || true
 - `Restart=on-failure`/`RestartSec=30`: 失敗時に30秒ごと再試行。初回は配備タグが`not-deployed`なので待機し、`deploy.ps1`がタグを設定してserviceを再起動する。
 - `systemctl daemon-reload` → `enable --now`: 定義を読み込み、有効化＋起動。
 
-### 5-2. 確認
+### 5-2. `infra/monitoring.tf`
+
+```hcl
+resource "aws_cloudwatch_log_group" "application" {
+  name              = "/${var.project_name}/application"
+  retention_in_days = 14
+
+  tags = {
+    Name = "${var.project_name}-application-logs"
+  }
+}
+
+data "aws_iam_policy_document" "cloudwatch_logs" {
+  statement {
+    sid       = "DescribeApplicationLogStreams"
+    actions   = ["logs:DescribeLogStreams"]
+    resources = [aws_cloudwatch_log_group.application.arn]
+  }
+
+  statement {
+    sid       = "WriteApplicationLogStreams"
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.application.arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "cloudwatch_logs" {
+  name   = "${var.project_name}-cloudwatch-logs"
+  role   = aws_iam_role.ec2.id
+  policy = data.aws_iam_policy_document.cloudwatch_logs.json
+}
+```
+
+**逐行解説**
+
+- `aws_cloudwatch_log_group.application`: EC2とは独立してアプリログを保存し、14日を過ぎたログを自動削除する。
+- `DescribeApplicationLogStreams`: Agentが対象ロググループ内のストリームを確認する権限だけを与える。
+- `WriteApplicationLogStreams`: 対象ロググループ配下に限り、ストリーム作成とログイベント書込を許可する。ロググループ作成・削除や他グループへの書込は許可しない。
+- `aws_iam_role_policy.cloudwatch_logs`: 上記の最小権限を既存のEC2ロールへ付与する。
+
+### 5-3. 確認
 ```bash
 terraform plan
 ```
-**逐行解説**: IAMロール/ポリシー/プロファイル・EC2用SG・EC2本体が並べばOK。
+**逐行解説**: CloudWatchロググループ、対象グループ限定のIAM、EC2本体が並べばOK。既存EC2がある場合は`user_data_replace_on_change`によりEC2だけが置換されること、RDS・S3・Cognitoが置換されないことを確認してからapplyする。
 
 ---
 

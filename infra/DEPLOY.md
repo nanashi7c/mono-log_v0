@@ -44,6 +44,16 @@ powershell -File deploy.ps1
 - `https://xxxx.cloudfront.net/api/health`が`{"status":"ok"}`を返すことを確認。スクリプト内の確認はEC2内部から行うため、この手動確認でCloudFrontを含む公開経路全体も確認する
 - 以降アプリのコードを更新したら **3 だけ** 再実行すればよい
 
+### アプリログを確認
+
+通常の障害調査ではCloudWatch Logsを確認します。通常の課金停止手順でEC2を削除した後も、ロググループを残すためログは14日間保持されます。
+
+```powershell
+aws logs tail /mono-log/application --region ap-northeast-1 --since 30m --follow
+```
+
+CloudWatchへの転送自体を調査するときは、SSM経由でEC2へ入り、`docker logs mono-log`と`systemctl status amazon-cloudwatch-agent`を確認します。Dockerのローカルログは1ファイル10MB、最大3ファイルに制限しています。
+
 ### 直前のイメージへ戻す
 ```powershell
 powershell -File deploy.ps1 -Rollback
