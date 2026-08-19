@@ -472,7 +472,7 @@ powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot -ListMigr
 
 やっていること:
 - `prisma/migrations`を日時順に自動検出し、空DBには全件、復元DBにはスナップショットに含まれない追加分だけを適用
-- 適用済みの名前を`app.schema_migrations`へ記録し、再実行時や将来の追加時は未適用分だけを実行
+- 適用済みの名前とSHA-256を`app.schema_migrations`へ記録し、再実行時や将来の追加時は未適用分だけを実行。同名SQLの内容が変わっていた場合は停止
 - 復元指定の誤りや、適用履歴のない既存DBへの通常実行をSQL適用前に停止
 - 選択したSQLを1トランザクションで適用し、途中失敗時は今回の変更全体をロールバック
 - 仕上げに`ALTER ROLE monolog_app WITH PASSWORD '<SSMの app_password>'`で、アプリ用ロールのパスワードを**SSMの強いパスワード**に差し替え（ローカルの`localapppw`から変更）

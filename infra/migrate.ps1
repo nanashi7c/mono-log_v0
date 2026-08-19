@@ -72,9 +72,20 @@ $ParametersFile = Join-Path $env:TEMP "mono-log-migrate-$RunId.json"
 $Bucket = $null
 
 try {
-  $ManifestEntries = @($SelectedMigrations | ForEach-Object { "$($_.Name).sql" })
+  $ManifestEntries = @($SelectedMigrations | ForEach-Object {
+      $MigrationFile = Join-Path $_.FullName "migration.sql"
+      $Checksum = (Get-FileHash -Path $MigrationFile -Algorithm SHA256).Hash.ToLowerInvariant()
+      "$($_.Name).sql|$Checksum"
+    })
+  $BaselineEntries = @($SnapshotBaselineMigrations | ForEach-Object {
+      $BaselineName = $_
+      $BaselineDirectory = $MigrationDirectories | Where-Object { $_.Name -eq $BaselineName }
+      $BaselineFile = Join-Path $BaselineDirectory.FullName "migration.sql"
+      $Checksum = (Get-FileHash -Path $BaselineFile -Algorithm SHA256).Hash.ToLowerInvariant()
+      "$BaselineName|$Checksum"
+    })
   $ManifestContent = if ($ManifestEntries.Count -eq 0) { "" } else { ($ManifestEntries -join "`n") + "`n" }
-  $BaselineContent = ($SnapshotBaselineMigrations -join "`n") + "`n"
+  $BaselineContent = ($BaselineEntries -join "`n") + "`n"
   [IO.File]::WriteAllText($ManifestFile, $ManifestContent, [Text.Encoding]::ASCII)
   [IO.File]::WriteAllText($BaselineManifestFile, $BaselineContent, [Text.Encoding]::ASCII)
 
@@ -132,89 +143,170 @@ HOST=$(aws ssm get-parameter --region "$REGION" --name "/$PROJECT/db/host" --que
 MPW=$(aws ssm get-parameter --region "$REGION" --name "/$PROJECT/db/password" --with-decryption --query Parameter.Value --output text)
 APW=$(aws ssm get-parameter --region "$REGION" --name "/$PROJECT/db/app_password" --with-decryption --query Parameter.Value --output text)
 
-BASE_SCHEMA_EXISTS=$(docker run --rm -e PGPASSWORD="$MPW" postgres:16 \
-  psql -h "$HOST" -U monolog_admin -d monolog -Atqc \
-  "select (to_regclass('public.users') is not null)::text;")
-MIGRATION_HISTORY_EXISTS=$(docker run --rm -e PGPASSWORD="$MPW" postgres:16 \
-  psql -h "$HOST" -U monolog_admin -d monolog -Atqc \
-  "select (to_regclass('app.schema_migrations') is not null)::text;")
+mapfile -t MIGRATION_ENTRIES < "$WORKDIR/manifest.txt"
+mapfile -t BASELINE_ENTRIES < "$WORKDIR/baseline.txt"
 
-if [ "$MODE" = "restored-snapshot" ] && [ "$BASE_SCHEMA_EXISTS" != "true" ]; then
-  echo "Restored snapshot mode requires the baseline schema, but public.users is missing." >&2
-  exit 1
-fi
-if [ "$MODE" = "automatic" ] && [ "$BASE_SCHEMA_EXISTS" = "true" ] && [ "$MIGRATION_HISTORY_EXISTS" != "true" ]; then
-  echo "Existing schema has no migration history. Use -RestoredSnapshot only for the documented snapshot baseline." >&2
+if [ "${#BASELINE_ENTRIES[@]}" -eq 0 ]; then
+  echo "Snapshot baseline manifest is empty." >&2
   exit 1
 fi
 
-mapfile -t MIGRATIONS < "$WORKDIR/manifest.txt"
-mapfile -t BASELINE_MIGRATIONS < "$WORKDIR/baseline.txt"
+BASELINE_MIGRATIONS=()
+BASELINE_CHECKSUMS=()
+for entry in "${BASELINE_ENTRIES[@]}"; do
+  entry=${entry%$'\r'}
+  IFS='|' read -r baseline_migration baseline_checksum extra <<< "$entry"
+  if [[ ! "$baseline_migration" =~ ^[0-9A-Za-z_-]+$ ]] ||
+     [[ ! "$baseline_checksum" =~ ^[0-9a-f]{64}$ ]] || [ -n "${extra:-}" ]; then
+    echo "Invalid snapshot baseline manifest entry: $entry" >&2
+    exit 1
+  fi
+  BASELINE_MIGRATIONS+=( "$baseline_migration" )
+  BASELINE_CHECKSUMS+=( "$baseline_checksum" )
+done
+INITIAL_MIGRATION=${BASELINE_MIGRATIONS[0]}
+INITIAL_CHECKSUM=${BASELINE_CHECKSUMS[0]}
 
-MIGRATION_ARGS=()
-APPLIED_MIGRATIONS=()
-for migration in "${MIGRATIONS[@]}"; do
-  migration=${migration%$'\r'}
-  [ -z "$migration" ] && continue
-  if [[ ! "$migration" =~ ^[0-9A-Za-z_-]+\.sql$ ]]; then
-    echo "Invalid migration file name: $migration" >&2
+MIGRATION_FILES=()
+MIGRATION_CHECKSUMS=()
+for entry in "${MIGRATION_ENTRIES[@]}"; do
+  entry=${entry%$'\r'}
+  [ -z "$entry" ] && continue
+  IFS='|' read -r migration checksum extra <<< "$entry"
+  if [[ ! "$migration" =~ ^[0-9A-Za-z_-]+\.sql$ ]] ||
+     [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]] || [ -n "${extra:-}" ]; then
+    echo "Invalid migration manifest entry: $entry" >&2
     exit 1
   fi
   if [ ! -f "$WORKDIR/$migration" ]; then
     echo "Migration file not found: $migration" >&2
     exit 1
   fi
-  migration_name=${migration%.sql}
-  already_applied=false
-  if [ "$MIGRATION_HISTORY_EXISTS" = "true" ]; then
-    already_applied=$(docker run --rm -e PGPASSWORD="$MPW" postgres:16 \
-      psql -h "$HOST" -U monolog_admin -d monolog -Atqc \
-      "select exists(select 1 from app.schema_migrations where name = '$migration_name')::text;")
+  actual_checksum=$(sha256sum "$WORKDIR/$migration" | awk '{print $1}')
+  if [ "$actual_checksum" != "$checksum" ]; then
+    echo "Migration checksum mismatch after S3 transfer: $migration" >&2
+    exit 1
   fi
-  if [ "$already_applied" != "true" ]; then
-    MIGRATION_ARGS+=( -f "/m/$migration" )
-    APPLIED_MIGRATIONS+=( "$migration_name" )
-  fi
+  MIGRATION_FILES+=( "$migration" )
+  MIGRATION_CHECKSUMS+=( "$checksum" )
 done
 
-cat > "$WORKDIR/begin-migrations.sql" <<'SQL'
+RESTORED_SNAPSHOT=false
+if [ "$MODE" = "restored-snapshot" ]; then
+  RESTORED_SNAPSHOT=true
+fi
+
+cat > "$WORKDIR/run-migrations.sql" <<'SQL'
+\set ON_ERROR_STOP on
 select pg_advisory_xact_lock(hashtext('mono-log-schema-migrations'));
+select
+  (to_regclass('public.users') is not null)::text as base_schema_exists,
+  (to_regclass('app.schema_migrations') is not null)::text as migration_history_exists
+\gset
+
+\if :restored_snapshot
+\if :base_schema_exists
+\else
+\echo 'Restored snapshot mode requires the baseline schema, but public.users is missing.'
+select 1 / 0;
+\endif
+\else
+\if :base_schema_exists
+\if :migration_history_exists
+\else
+\echo 'Existing schema has no migration history. Use -RestoredSnapshot only for the documented snapshot baseline.'
+select 1 / 0;
+\endif
+\endif
+\endif
 SQL
 
-cat > "$WORKDIR/finalize-migrations.sql" <<'SQL'
+cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\if :migration_history_exists
+SQL
+printf "select exists(select 1 from app.schema_migrations where name = '%s')::text as initial_migration_recorded, coalesce((select checksum = '%s' from app.schema_migrations where name = '%s'), false)::text as initial_checksum_matches;\n" \
+  "$INITIAL_MIGRATION" "$INITIAL_CHECKSUM" "$INITIAL_MIGRATION" >> "$WORKDIR/run-migrations.sql"
+cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\gset
+\if :initial_migration_recorded
+\if :initial_checksum_matches
+\else
+\echo 'Applied initial migration checksum does not match the repository.'
+select 1 / 0;
+\endif
+\else
+\echo 'Migration history is inconsistent: initial migration is not recorded.'
+select 1 / 0;
+\endif
+\endif
+
+\if :base_schema_exists
+\else
+SQL
+printf "\\ir /m/%s.sql\n" "$INITIAL_MIGRATION" >> "$WORKDIR/run-migrations.sql"
+cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\endif
+
 create table if not exists app.schema_migrations (
   name text primary key,
+  checksum char(64) not null,
   applied_at timestamptz not null default now()
 );
 SQL
 
-if [ "$MODE" = "restored-snapshot" ] && [ "$MIGRATION_HISTORY_EXISTS" != "true" ]; then
-  for baseline_migration in "${BASELINE_MIGRATIONS[@]}"; do
-    baseline_migration=${baseline_migration%$'\r'}
-    if [[ ! "$baseline_migration" =~ ^[0-9A-Za-z_-]+$ ]]; then
-      echo "Invalid baseline migration name: $baseline_migration" >&2
-      exit 1
-    fi
-    printf "insert into app.schema_migrations (name) values ('%s') on conflict (name) do nothing;\n" \
-      "$baseline_migration" >> "$WORKDIR/finalize-migrations.sql"
+cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\if :base_schema_exists
+\if :migration_history_exists
+\else
+SQL
+  for index in "${!BASELINE_MIGRATIONS[@]}"; do
+    printf "insert into app.schema_migrations (name, checksum) values ('%s', '%s') on conflict (name) do nothing;\n" \
+      "${BASELINE_MIGRATIONS[$index]}" "${BASELINE_CHECKSUMS[$index]}" >> "$WORKDIR/run-migrations.sql"
   done
-fi
+cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\endif
+\else
+SQL
+printf "insert into app.schema_migrations (name, checksum) values ('%s', '%s') on conflict (name) do nothing;\n" \
+  "$INITIAL_MIGRATION" "$INITIAL_CHECKSUM" >> "$WORKDIR/run-migrations.sql"
+cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\endif
+SQL
 
-for applied_migration in "${APPLIED_MIGRATIONS[@]}"; do
-  printf "insert into app.schema_migrations (name) values ('%s') on conflict (name) do nothing;\n" \
-    "$applied_migration" >> "$WORKDIR/finalize-migrations.sql"
+for index in "${!MIGRATION_FILES[@]}"; do
+  migration=${MIGRATION_FILES[$index]}
+  checksum=${MIGRATION_CHECKSUMS[$index]}
+  migration_name=${migration%.sql}
+  [ "$migration_name" = "$INITIAL_MIGRATION" ] && continue
+
+  printf "select exists(select 1 from app.schema_migrations where name = '%s')::text as migration_applied, coalesce((select checksum = '%s' from app.schema_migrations where name = '%s'), false)::text as migration_checksum_matches;\n" \
+    "$migration_name" "$checksum" "$migration_name" >> "$WORKDIR/run-migrations.sql"
+  cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\gset
+\if :migration_applied
+\if :migration_checksum_matches
+\else
+\echo 'Applied migration checksum does not match the repository.'
+select 1 / 0;
+\endif
+\else
+SQL
+  printf "\\ir /m/%s\n" "$migration" >> "$WORKDIR/run-migrations.sql"
+  printf "insert into app.schema_migrations (name, checksum) values ('%s', '%s');\n" \
+    "$migration_name" "$checksum" >> "$WORKDIR/run-migrations.sql"
+  cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\endif
+SQL
 done
 
-cat >> "$WORKDIR/finalize-migrations.sql" <<'SQL'
+cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
 ALTER ROLE monolog_app WITH PASSWORD :'app_password';
 SQL
 
 docker run --rm -e PGPASSWORD="$MPW" -v "$WORKDIR:/m:ro" postgres:16 \
   psql -h "$HOST" -U monolog_admin -d monolog \
-  -v ON_ERROR_STOP=1 -v app_password="$APW" --single-transaction \
-  -f /m/begin-migrations.sql \
-  "${MIGRATION_ARGS[@]}" \
-  -f /m/finalize-migrations.sql
+  -v ON_ERROR_STOP=1 -v app_password="$APW" -v restored_snapshot="$RESTORED_SNAPSHOT" \
+  --single-transaction -f /m/run-migrations.sql
 '@
   $Bash = $Bash.Replace("__REGION__", $Region).
       Replace("__PROJECT__", $Project).
