@@ -33,12 +33,20 @@ export function createPrismaItemExportRepository(
   return {
     async read(userId) {
       return runWithUser(userId, async (tx) => {
-        const categoryRows = await tx.category.findMany({ where: { userId } });
         const itemRows = await tx.item.findMany();
         const categoryIds = await categoryIdsByItem(
           tx,
           itemRows.map(({ id }) => Number(id)),
         );
+        const linkedCategoryIds = [
+          ...new Set([...categoryIds.values()].flat()),
+        ];
+        const categoryRows = await tx.category.findMany({
+          where:
+            linkedCategoryIds.length === 0
+              ? { userId }
+              : { OR: [{ userId }, { id: { in: linkedCategoryIds } }] },
+        });
         const categories = Object.freeze(
           categoryRows.map((row) => Object.freeze(toCategory(row))),
         );

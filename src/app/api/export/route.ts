@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { itemBackupFilename } from "@/features/items/application/item-export-data";
+import {
+  itemBackupCsvFilename,
+  serializeItemBackupCsv,
+} from "@/features/items/adapters/item-backup-csv";
 import { exportItemsUseCase } from "@/features/items/application/item-export-use-cases";
 import { prismaItemExportRepository } from "@/features/items/infrastructure/prisma-item-export-repository";
 import { getCurrentUser } from "@/lib/auth/session";
@@ -17,11 +20,11 @@ export async function GET() {
   const backup = await exportItemsUseCase(itemExportDependencies, {
     userId: user.sub,
   });
-  return new NextResponse(JSON.stringify(backup, null, 2), {
+  return new NextResponse(serializeItemBackupCsv(backup), {
     status: 200,
     headers: {
-      "content-type": "application/json; charset=utf-8",
-      "content-disposition": `attachment; filename="${itemBackupFilename(backup)}"`,
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="${itemBackupCsvFilename(backup)}"`,
     },
   });
 }

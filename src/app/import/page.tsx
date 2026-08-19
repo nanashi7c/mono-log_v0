@@ -12,9 +12,9 @@ export default async function ImportPage({
 
   return (
     <div className={styles.container}>
-      <h1 className={styles.title}>JSON インポート</h1>
+      <h1 className={styles.title}>CSV インポート</h1>
       <p className={styles.desc}>
-        エクスポートした JSON を読み込み、自分のアカウントに追加します。既存データは保持され、新しい id で重複登録される可能性があります。
+        ダッシュボードからエクスポートした CSV を読み込み、自分のアカウントに追加します。既存データは保持され、新しい id で重複登録される可能性があります。
       </p>
 
       {error ? (
@@ -28,7 +28,7 @@ export default async function ImportPage({
         <input
           name="file"
           type="file"
-          accept="application/json"
+          accept=".csv,text/csv"
           required
           className={styles.fileInput}
         />

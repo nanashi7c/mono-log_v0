@@ -18,7 +18,3 @@ export type ItemBackup = Readonly<{
   categories: readonly Readonly<Category>[];
   items: readonly ExportedItem[];
 }>;
-
-export function itemBackupFilename(backup: ItemBackup): string {
-  return `mono-log-${backup.exported_at.slice(0, 10)}.json`;
-}

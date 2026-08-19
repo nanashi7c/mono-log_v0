@@ -170,7 +170,7 @@ erDiagram
 - **購入予定リスト**: 購入予定年月・定価・購入予定価格・商品リンク・お買い得期間
 - **出品リスト**: 販売手数料・送料・作業時間コストを含む**損益を自動計算**し、出品可否を判定
 - **マイページ**: プロフィール編集・メールアドレス変更・パスワード変更・退会
-- **JSON エクスポート / インポート**（アイテム＋カテゴリ）
+- **CSV エクスポート / インポート**（ダッシュボード画面、アイテム＋カテゴリ）
 - **REST API**: items / categories / export（モバイル・外部連携向け）
 
 ## セットアップ（ローカル開発）
@@ -221,9 +221,9 @@ src/
     items/                一覧/詳細/新規/編集/状態遷移
     items/actions.ts      アイテム CRUD（RLS 下で create/update/delete）
     dashboard/ mypage/    集計 / マイページ（退会・メール変更）
-    import/               JSON 取り込み
-    api/export/route.ts   JSON ダウンロード（Cookie 認証）
-    api/v1/               外部向け REST API（Bearer 認証）items/categories/export
+    import/               CSV 取り込み（画面操作用）
+    api/export/route.ts   CSV ダウンロード（Cookie 認証）
+    api/v1/               外部向け JSON REST API（Bearer 認証）items/categories/export
   components/             UI（item-card / item-form / nav-bar / filter-bar）
   features/home/          トップ画面のユーザー名・件数Query
   features/items/         itemsのdomain/application/infrastructure/adapters

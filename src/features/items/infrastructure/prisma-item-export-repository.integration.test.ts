@@ -70,11 +70,14 @@ afterAll(async () => {
 });
 
 describe("prismaItemExportRepository", () => {
-  it("指定ユーザーのカテゴリとアイテムだけを公開形式で返す", async () => {
+  it("復元に必要な可視カテゴリと指定ユーザーのアイテムを公開形式で返す", async () => {
     const userId = await createTestUser("export-owner");
     const otherUserId = await createTestUser("export-other");
     const category = await admin.category.create({
       data: { userId, name: "export category", color: "#112233" },
+    });
+    const presetCategory = await admin.category.findFirstOrThrow({
+      where: { isPreset: true },
     });
     const item = await admin.item.create({
       data: {
@@ -88,6 +91,9 @@ describe("prismaItemExportRepository", () => {
     await admin.itemCategory.create({
       data: { itemId: item.id, categoryId: category.id },
     });
+    await admin.itemCategory.create({
+      data: { itemId: item.id, categoryId: presetCategory.id },
+    });
     await admin.item.create({
       data: {
         userId: otherUserId,
@@ -99,19 +105,28 @@ describe("prismaItemExportRepository", () => {
 
     const result = await repository.read(userId);
 
-    expect(result.categories).toHaveLength(1);
-    expect(result.categories[0]).toMatchObject({
-      id: category.id,
-      user_id: userId,
-      name: "export category",
-    });
+    expect(result.categories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: category.id,
+          user_id: userId,
+          name: "export category",
+        }),
+        expect.objectContaining({
+          id: presetCategory.id,
+          user_id: null,
+          is_preset: true,
+        }),
+      ]),
+    );
+    expect(result.categories).toHaveLength(2);
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toMatchObject({
       id: Number(item.id),
       user_id: userId,
       name: "export item",
       actual_price: 12_000,
-      category_ids: [category.id],
+      category_ids: expect.arrayContaining([category.id, presetCategory.id]),
     });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.items[0].category_ids)).toBe(true);
