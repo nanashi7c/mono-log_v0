@@ -485,6 +485,9 @@ powershell -ExecutionPolicy Bypass -File deploy.ps1
 - 既定タグはGit HEADの40文字commit SHAです。同じSHAがECRにあれば既存イメージを再利用します。
 - `--provenance=false`を付けて、EC2のDockerが取得できる単一イメージmanifestとしてpushします。
 - 独自タグが必要な場合だけ`-Tag release-2026-08-19`のように指定できます。
+- EC2でコンテナを再起動した後、DockerのHTTPヘルスチェックが`healthy`になるまで待ちます。正常になった場合だけ、現在タグと直前タグを確定します。
+- 新しいコンテナが正常にならなければ、SSMの現在タグを元に戻し、直前まで稼働していたイメージを再起動して`healthy`になるまで確認します。
+- 初回配備で直前のイメージがない場合は、失敗したコンテナを削除し、現在タグを`not-deployed`へ戻して失敗終了します。ログに表示された原因を修正してから再実行してください。
 - 現在タグと直前タグはSSM上の共有状態なので、複数の`deploy.ps1`を同時に実行しないでください。
 
 ### 直前のイメージへロールバック
@@ -492,7 +495,7 @@ powershell -ExecutionPolicy Bypass -File deploy.ps1
 powershell -ExecutionPolicy Bypass -File deploy.ps1 -Rollback
 ```
 
-SSMの`previous_image_tag`が指すイメージを再配備します。成功後は現在タグと直前タグが入れ替わるため、同じコマンドで切り戻しもできます。ECRのライフサイクルにより直近10イメージを超えたものは削除されるため、ロールバックできません。
+SSMの`previous_image_tag`が指すイメージを再配備します。成功後は現在タグと直前タグが入れ替わるため、同じコマンドで切り戻しもできます。ロールバック先が正常にならない場合は、開始前に稼働していたイメージへ自動的に戻します。ECRのライフサイクルにより直近10イメージを超えたものは削除されるため、ロールバックできません。
 
 ### CloudFrontドメインを確認
 ```bash
@@ -506,7 +509,7 @@ aws cloudfront list-distributions \
 Invoke-RestMethod https://xxxxx.cloudfront.net/api/health
 ```
 
-`status`が`ok`なら、CloudFrontからコンテナまでの経路とNext.jsプロセスは正常です。この確認はDB・Cognito・S3の稼働状態までは検査しません。
+`deploy.ps1`はEC2内部から同じヘルスエンドポイントを確認します。ここで`status`が`ok`なら、さらにCloudFrontからコンテナまでの公開経路とNext.jsプロセスも正常です。どちらの確認もDB・Cognito・S3の稼働状態までは検査しません。
 
 ---
 
