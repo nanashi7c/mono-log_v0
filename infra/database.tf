@@ -79,9 +79,11 @@ resource "aws_db_instance" "main" {
   auto_minor_version_upgrade = true
   backup_retention_period    = 7
 
-  # 簡易設定（本番では見直す）
-  skip_final_snapshot = true  # 削除時に最終スナップショットを取らない
-  deletion_protection = false # 削除保護なし
+  # 通常は削除を拒否する。意図的な削除時だけ、削除保護の解除と
+  # 最終スナップショット名を db_deletion_safety で同時に指定する。
+  deletion_protection       = var.db_deletion_safety.protection_enabled
+  skip_final_snapshot       = var.db_deletion_safety.final_snapshot_identifier == null
+  final_snapshot_identifier = var.db_deletion_safety.final_snapshot_identifier
 
   tags = {
     Name = "${var.project_name}-db"

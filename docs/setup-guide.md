@@ -529,15 +529,30 @@ aws ssm get-command-invocation --region ap-northeast-1 --command-id $CID --insta
 
 **RDS/EC2/CloudFrontは起動中ずっと課金**されます。使い終わったらこの3つだけ消し、VPC/Cognito/ECR/S3/SSMは残します（再開を楽にするため）。
 
-> DBを消す前に、必要ならスナップショットを取るか判断してください。`skip_final_snapshot=true`なので**destroyするとDBデータは完全消去**されます（このアプリの中身は11章のマイグレーションで再現可能）。
+RDSは通常、削除保護が有効です。意図的に削除する場合は、最終スナップショット名を指定して削除保護を解除してから、同じ設定で削除します。`mono-log-db-final-20260819-1530`は実行日時などを含む未使用の名前に置き換えてください。
 
 ```bash
 cd infra
+export TF_VAR_db_deletion_safety='{"protection_enabled":false,"final_snapshot_identifier":"mono-log-db-final-20260819-1530"}'
+
+# 削除保護の解除と最終スナップショット名の設定だけか確認して適用
+terraform plan -target=aws_db_instance.main
+terraform apply -target=aws_db_instance.main
+
+# 同じ設定で削除。RDSは最終スナップショットの作成後に削除される
 terraform destroy \
   -target=aws_cloudfront_distribution.app \
   -target=aws_instance.app \
   -target=aws_db_instance.main
+
+unset TF_VAR_db_deletion_safety
 ```
+
+- `plan`が既存RDSの**更新（update in-place）だけ**であることを確認してください。新規作成（add）や置換（replace）が表示された場合はapplyしないでください。
+- RDSが既に存在しない場合は環境変数を解除し、`aws_db_instance.main`を外してEC2とCloudFrontだけをdestroyしてください。
+- 同名のスナップショットが既にある場合、RDSの削除は失敗します。別の名前を指定してください。
+- 解除後に削除を中止した場合は、`unset TF_VAR_db_deletion_safety`の後に`terraform apply -target=aws_db_instance.main`で削除保護を有効に戻してください。
+- 最終スナップショットはRDS削除後も保存料金がかかります。不要になったら内容を確認してAWS上で削除してください。
 
 ### 再開するとき
 ```bash
@@ -546,6 +561,8 @@ terraform apply        # RDS/EC2/CloudFrontを再作成（DNS/CloudFrontドメ�
 # → 11章 migrate.ps1（新しいRDSへ）
 # → 12章 deploy（ビルド→push→起動）
 ```
+
+保存したデータから再開する場合は、通常の`terraform apply`の代わりに`terraform apply -var="db_snapshot_identifier=<最終スナップショット名>"`を実行します。
 
 ### コード更新だけのとき
 インフラを消していなければ、**12章のデプロイだけ**再実行すれば反映されます。

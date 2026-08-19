@@ -24,6 +24,32 @@ variable "db_snapshot_identifier" {
   default     = null
 }
 
+# 通常運用では削除保護を有効にする。意図的に削除する場合だけ、削除保護の解除と
+# 最終スナップショット名を一つの値として渡し、不完全な削除設定を防ぐ。
+variable "db_deletion_safety" {
+  description = "RDS の削除保護と最終スナップショットをまとめて制御する。通常は既定値を使用する。"
+  type = object({
+    protection_enabled        = bool
+    final_snapshot_identifier = optional(string)
+  })
+  default = {
+    protection_enabled = true
+  }
+
+  validation {
+    condition = var.db_deletion_safety.protection_enabled ? (
+      var.db_deletion_safety.final_snapshot_identifier == null
+      ) : try(
+      length(var.db_deletion_safety.final_snapshot_identifier) <= 255 &&
+      can(regex("^[A-Za-z][A-Za-z0-9-]*$", var.db_deletion_safety.final_snapshot_identifier)) &&
+      !endswith(var.db_deletion_safety.final_snapshot_identifier, "-") &&
+      !strcontains(var.db_deletion_safety.final_snapshot_identifier, "--"),
+      false
+    )
+    error_message = "削除保護を無効にする場合は、英字で始まり、英数字と単一ハイフンだけを使う255文字以内の final_snapshot_identifier が必要です。通常運用では protection_enabled=true のみを指定してください。"
+  }
+}
+
 variable "s3_upload_allowed_origins" {
   description = "ブラウザから商品画像をS3へ直接送信できる追加オリジン"
   type        = list(string)
