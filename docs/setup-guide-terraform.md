@@ -846,7 +846,7 @@ EOF
 ```bash
 #!/bin/bash
 set -euo pipefail
-dnf install -y docker amazon-cloudwatch-agent
+dnf install -y docker
 
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<'DOCKERCONFIG'
@@ -860,7 +860,8 @@ cat > /etc/docker/daemon.json <<'DOCKERCONFIG'
 DOCKERCONFIG
 systemctl enable --now docker
 
-cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWAGENT'
+if dnf install -y amazon-cloudwatch-agent; then
+  cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWAGENT'
 {
   "agent": {
     "region": "${var.aws_region}"
@@ -880,18 +881,24 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWAGE
   }
 }
 CWAGENT
-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-  -a fetch-config -m ec2 -s \
-  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-systemctl enable amazon-cloudwatch-agent
+  if /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+    -a fetch-config -m ec2 -s \
+    -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json; then
+    systemctl enable amazon-cloudwatch-agent || echo "Failed to enable CloudWatch Agent at boot" >&2
+  else
+    echo "Failed to start CloudWatch Agent; application startup will continue" >&2
+  fi
+else
+  echo "Failed to install CloudWatch Agent; application startup will continue" >&2
+fi
 ```
 - `#!/bin/bash`: bashで実行。
 - `set -euo pipefail`: エラーで停止(`-e`)・未定義変数で停止(`-u`)・パイプ失敗も検知(`pipefail`)。安全実行の定番。
-- `dnf install -y docker amazon-cloudwatch-agent`: DockerとCloudWatch Agentを導入(`-y`で確認なし)。
+- `dnf install -y docker`: アプリ実行に必須のDockerを導入する。失敗した場合は`set -e`により起動処理を停止する。
 - `/etc/docker/daemon.json`: `docker logs`を維持しながら、ローカルログを1ファイル10MB・最大3ファイルに制限してディスクの無制限消費を防ぐ。
 - `systemctl enable --now docker`: Dockerを起動＋自動起動有効化。
 - `amazon-cloudwatch-agent.json`: Dockerの現在のJSONログを、`/mono-log/application`のEC2インスタンス別ストリームへ転送する設定。
-- `amazon-cloudwatch-agent-ctl ... -s`: 設定を読み込み、Agentを起動する。続く`systemctl enable`でEC2再起動時の自動起動も明示的に有効化する。
+- `if dnf install ... amazon-cloudwatch-agent`: Agentを導入し、設定を読み込んで起動する。導入・起動に失敗してもエラーを残してアプリ起動は継続し、監視の一時障害をアプリ停止へ波及させない。起動成功後の`systemctl enable`でEC2再起動時の自動起動も明示的に有効化する。
 
 ```bash
 cat > /etc/mono-log.env <<ENV

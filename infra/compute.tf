@@ -157,7 +157,7 @@ resource "aws_instance" "app" {
   user_data = <<-EOF
 #!/bin/bash
 set -euo pipefail
-dnf install -y docker amazon-cloudwatch-agent
+dnf install -y docker
 
 # Keep docker logs available locally for immediate SSM troubleshooting without unbounded disk growth.
 mkdir -p /etc/docker
@@ -172,8 +172,9 @@ cat > /etc/docker/daemon.json <<'DOCKERCONFIG'
 DOCKERCONFIG
 systemctl enable --now docker
 
-# Forward the current container JSON log to a per-instance CloudWatch Logs stream.
-cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWAGENT'
+# Forward the current container JSON log without making application startup depend on monitoring.
+if dnf install -y amazon-cloudwatch-agent; then
+  cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWAGENT'
 {
   "agent": {
     "region": "${var.aws_region}"
@@ -193,10 +194,16 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWAGE
   }
 }
 CWAGENT
-/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-  -a fetch-config -m ec2 -s \
-  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-systemctl enable amazon-cloudwatch-agent
+  if /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+    -a fetch-config -m ec2 -s \
+    -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json; then
+    systemctl enable amazon-cloudwatch-agent || echo "Failed to enable CloudWatch Agent at boot" >&2
+  else
+    echo "Failed to start CloudWatch Agent; application startup will continue" >&2
+  fi
+else
+  echo "Failed to install CloudWatch Agent; application startup will continue" >&2
+fi
 
 # Terraform が埋め込む非機密の設定
 cat > /etc/mono-log.env <<ENV
