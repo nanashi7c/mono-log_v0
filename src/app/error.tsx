@@ -3,7 +3,6 @@
 import styles from "./error.module.css";
 
 export default function ErrorBoundary({
-  error,
   reset,
 }: {
   error: Error & { digest?: string };
@@ -12,7 +11,9 @@ export default function ErrorBoundary({
   return (
     <div className={styles.container}>
       <p className={styles.title}>エラーが発生しました</p>
-      <p className={styles.message}>{error.message}</p>
+      <p className={styles.message}>
+        処理を完了できませんでした。時間をおいてもう一度お試しください。
+      </p>
       <button type="button" onClick={reset} className={styles.retry}>
         再試行
       </button>

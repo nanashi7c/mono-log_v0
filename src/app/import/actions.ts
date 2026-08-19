@@ -35,8 +35,8 @@ export async function importBackup(formData: FormData): Promise<never> {
     });
     insertedItems = result.insertedItems;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    redirect(importErrorPath(message));
+    console.error("CSVインポートの保存に失敗しました。", error);
+    redirect("/import?error=import-failed");
   }
 
   revalidatePath("/");

@@ -45,6 +45,8 @@ curl -s "$BASE/items" -H "Authorization: Bearer $TOKEN"
 | 404 | 対象が存在しない（または他人の行で見えない） |
 | 500 | サーバ内部エラー |
 
+入力検証で判定できるエラーは具体的な安全なメッセージを返します。DB制約違反の詳細やSQL・Prismaなどの内部情報は返さず、入力起因のDBエラーは`invalid request`、それ以外は`internal error`とします。詳細はサーバーログにだけ記録します。
+
 ---
 
 ## エンドポイント一覧

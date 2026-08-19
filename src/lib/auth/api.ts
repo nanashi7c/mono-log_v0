@@ -1,6 +1,26 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyIdToken } from "./cognito";
 
+const CLIENT_INPUT_DATABASE_ERROR_CODES = new Set([
+  "P2000",
+  "P2002",
+  "P2003",
+  "P2004",
+  "P2006",
+  "P2007",
+  "P2011",
+  "P2014",
+  "P2019",
+  "P2020",
+  "P2033",
+]);
+
+function databaseErrorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
 // REST API 用の認証ユーザ（Cognito の sub と email）。
 export type ApiUser = { sub: string; email: string };
 
@@ -30,13 +50,13 @@ export function badRequest(message: string): NextResponse {
   return jsonError(400, message);
 }
 
-// DB 例外を適切な HTTP に振り分ける。Prisma の既知エラー(P2xxx: 一意/FK/制約等)は
-// クライアント起因が多いので 400、その他は 500。
-export function dbErrorResponse(e: unknown): NextResponse {
-  const code = (e as { code?: string }).code;
-  if (typeof code === "string" && /^P2\d{3}$/.test(code)) {
-    return jsonError(400, (e as Error).message);
+// DB 例外の詳細はサーバーにだけ記録し、公開レスポンスは固定メッセージにする。
+export function dbErrorResponse(error: unknown): NextResponse {
+  console.error("REST APIのデータ処理に失敗しました。", error);
+
+  const code = databaseErrorCode(error);
+  if (code && CLIENT_INPUT_DATABASE_ERROR_CODES.has(code)) {
+    return jsonError(400, "invalid request");
   }
-  console.error(e);
   return jsonError(500, "internal error");
 }

@@ -37,7 +37,7 @@ export default async function SignupPage({
           />
         </label>
         {error ? (
-          <p className={styles.error}>{decodeURIComponent(error)}</p>
+          <p className={styles.error}>{error}</p>
         ) : null}
         {message ? (
           <p className={styles.success}>{decodeURIComponent(message)}</p>
