@@ -83,10 +83,10 @@ export default async function DashboardPage() {
         <h1 className={styles.title}>ダッシュボード</h1>
         <div className={styles.actions}>
           <a href="/api/export" className={styles.actionLink}>
-            エクスポート
+            CSV エクスポート
           </a>
           <Link href="/import" className={styles.actionLink}>
-            インポート
+            CSV インポート
           </Link>
         </div>
       </div>

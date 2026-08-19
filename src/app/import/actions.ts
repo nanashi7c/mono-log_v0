@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { parseItemBackup } from "@/features/items/adapters/parse-item-backup";
+import { parseItemBackupCsv } from "@/features/items/adapters/item-backup-csv";
 import { importItemsUseCase } from "@/features/items/application/item-import-use-cases";
 import { prismaItemImportRepository } from "@/features/items/infrastructure/prisma-item-import-repository";
 import { getCurrentUser } from "@/lib/auth/session";
@@ -24,7 +24,7 @@ export async function importBackup(formData: FormData): Promise<never> {
     redirect("/import?error=no-file");
   }
 
-  const parsed = parseItemBackup(await file.text());
+  const parsed = parseItemBackupCsv(await file.text());
   if (!parsed.ok) redirect(importErrorPath(parsed.error));
 
   let insertedItems: number;

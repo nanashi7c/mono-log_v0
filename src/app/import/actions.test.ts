@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   redirect: vi.fn((path: string): never => {
     throw new Error(`redirect:${path}`);
   }),
-  parseItemBackup: vi.fn(),
+  parseItemBackupCsv: vi.fn(),
   importItemsUseCase: vi.fn(),
   getCurrentUser: vi.fn(),
 }));
@@ -19,8 +19,8 @@ vi.mock("next/navigation", () => ({
   redirect: mocks.redirect,
 }));
 
-vi.mock("@/features/items/adapters/parse-item-backup", () => ({
-  parseItemBackup: mocks.parseItemBackup,
+vi.mock("@/features/items/adapters/item-backup-csv", () => ({
+  parseItemBackupCsv: mocks.parseItemBackupCsv,
 }));
 
 vi.mock("@/features/items/application/item-import-use-cases", () => ({
@@ -46,8 +46,8 @@ function backupFormData(): FormData {
   const formData = new FormData();
   formData.set(
     "file",
-    new File([JSON.stringify({ items: [] })], "backup.json", {
-      type: "application/json",
+    new File(["record_type,name"], "backup.csv", {
+      type: "text/csv",
     }),
   );
   return formData;
@@ -56,7 +56,7 @@ function backupFormData(): FormData {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getCurrentUser.mockResolvedValue({ sub: "user-1" });
-  mocks.parseItemBackup.mockReturnValue({ ok: true, value: input });
+  mocks.parseItemBackupCsv.mockReturnValue({ ok: true, value: input });
   mocks.importItemsUseCase.mockResolvedValue({ insertedItems: 2 });
 });
 
@@ -68,7 +68,7 @@ describe("importBackup", () => {
       "redirect:/login",
     );
 
-    expect(mocks.parseItemBackup).not.toHaveBeenCalled();
+    expect(mocks.parseItemBackupCsv).not.toHaveBeenCalled();
     expect(mocks.importItemsUseCase).not.toHaveBeenCalled();
   });
 
@@ -77,11 +77,11 @@ describe("importBackup", () => {
       "redirect:/import?error=no-file",
     );
 
-    expect(mocks.parseItemBackup).not.toHaveBeenCalled();
+    expect(mocks.parseItemBackupCsv).not.toHaveBeenCalled();
   });
 
   it("解析エラーをインポート画面へ渡す", async () => {
-    mocks.parseItemBackup.mockReturnValue({
+    mocks.parseItemBackupCsv.mockReturnValue({
       ok: false,
       error: "invalid format",
     });
