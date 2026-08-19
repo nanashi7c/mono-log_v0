@@ -209,8 +209,15 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modul
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME=0.0.0.0
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -q -T 5 -O /dev/null \
+    --header="x-mono-log-origin-verify: ${CLOUDFRONT_ORIGIN_VERIFY_SECRET}" \
+    http://127.0.0.1:3000/api/health || exit 1
 CMD ["node", "server.js"]
 ```
+
+- `HEALTHCHECK`: 30秒ごとに`/api/health`を確認し、3回連続で失敗したコンテナを`unhealthy`にする。DB等の外部サービスには接続せず、Next.jsプロセスの死活だけを確認する。
+- オリジン検証が有効な本番環境でも内部確認できるよう、コンテナへ渡された検証秘密値をヘッダーに設定する。秘密値そのものはDockerイメージに保存しない。
 
 ### .dockerignore（ビルドコンテキストを軽くする）
 ```
@@ -492,6 +499,14 @@ SSMの`previous_image_tag`が指すイメージを再配備します。成功後
 aws cloudfront list-distributions \
   --query "DistributionList.Items[?Comment=='mono-log app distribution'].DomainName" --output text
 ```
+
+表示されたドメインの`/api/health`へアクセスし、Next.jsプロセスが応答できることを確認します。
+
+```powershell
+Invoke-RestMethod https://xxxxx.cloudfront.net/api/health
+```
+
+`status`が`ok`なら、CloudFrontからコンテナまでの経路とNext.jsプロセスは正常です。この確認はDB・Cognito・S3の稼働状態までは検査しません。
 
 ---
 

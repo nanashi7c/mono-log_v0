@@ -34,4 +34,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modul
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME=0.0.0.0
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -q -T 5 -O /dev/null \
+    --header="x-mono-log-origin-verify: ${CLOUDFRONT_ORIGIN_VERIFY_SECRET}" \
+    http://127.0.0.1:3000/api/health || exit 1
 CMD ["node", "server.js"]

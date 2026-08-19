@@ -38,6 +38,7 @@ powershell -File deploy.ps1
 - SSMの`/mono-log/deploy/image_tag`を更新し、EC2がその固定タグをpullしてコンテナを更新
 - 現在タグと直前タグは共有状態のため、複数の`deploy.ps1`を同時に実行しない
 - 最後に表示される CloudFront ドメイン（`xxxx.cloudfront.net`）にブラウザでアクセス
+- `https://xxxx.cloudfront.net/api/health`が`{"status":"ok"}`を返すことを確認
 - 以降アプリのコードを更新したら **3 だけ** 再実行すればよい
 
 ### 直前のイメージへ戻す
