@@ -45,7 +45,7 @@ describe("middleware origin verification", () => {
     },
   );
 
-  it.each(["/api/v1/items", "/_next/static/chunk.js", "/item.png"])(
+  it.each(["/api/health", "/api/v1/items", "/_next/static/chunk.js", "/item.png"])(
     "allows the CloudFront secret without applying page authentication to %s",
     async (path) => {
       process.env.CLOUDFRONT_ORIGIN_VERIFY_SECRET = "expected";
