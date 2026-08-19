@@ -82,7 +82,7 @@
 | Terraform 1.9+ | インフラ構築 | `terraform -version` |
 | VSCode（任意） | エディタ | - |
 
-> Windowsの場合、後半のビルド/push手順は **git bash** で行います（PowerShellだとECRログインのトークンが壊れて失敗することがあるため。15章参照）。
+> Windowsの本番デプロイは`infra/deploy.ps1`で行います。スクリプト内でPowerShellのstdin問題を避け、固定イメージタグとロールバック状態を一括管理します。
 
 ### ここまでの確認
 すべてのコマンドがバージョンを表示すればOKです。
@@ -436,11 +436,11 @@ terraform apply    # yes で作成。RDS作成に数分かかる
 - **cognito.tf**: User Pool + Webクライアント（USER_PASSWORD_AUTH/SRP/REFRESH許可）+ SSM（user_pool_id, client_id）
 - **storage.tf**: 画像用S3（全公開ブロック+SSE）+ SSM（s3/bucket）
 - **database.tf**: RDS（`db.t4g.micro`, PG16, private, 20GB）+ マスタ/アプリ両ロールのパスワードをSSMに（`db/password`, `db/app_password`）+ 接続情報SSM（host/port/name/username）
-- **ecr.tf**: イメージ保管庫 + 直近10個保持のライフサイクル
-- **compute.tf**: EC2用IAMロール（SSM読取・ECR読取・S3 RW）+ EC2（ARM, Docker自動導入, 起動時にSSMから設定とオリジン検証秘密値を取得して`docker run`）+ ルート30GB
+- **ecr.tf**: 上書き不可のイメージ保管庫 + 現在/直前の配備タグを持つSSM + 直近10個保持のライフサイクル
+- **compute.tf**: EC2用IAMロール（SSM読取・ECR読取・S3 RW）+ EC2（ARM, Docker自動導入, 起動時にSSMから設定・固定イメージタグ・オリジン検証秘密値を取得して`docker run`）+ ルート30GB
 - **cdn.tf**: CloudFront（HTTPS強制・キャッシュ無効・全ヘッダ転送、オリジン=EC2、オリジン検証用の秘密ヘッダー）
 
-> この時点ではEC2にイメージがまだ無いため、アプリは未起動（systemdが30秒ごとに再試行）です。次の11〜12章で投入します。
+> 初回構築では配備タグが`not-deployed`のため、アプリは未起動（systemdが30秒ごとに再試行）です。次の11〜12章で固定タグのイメージを投入します。再作成時はSSMに残ったタグのイメージがECRにあれば自動起動します。
 
 ### ここまでで
 土台（ネットワーク/DB/認証/保管庫/サーバ/CDN）がAWS上に揃いました。9-3に戻って`.env.local`を埋めれば、ローカルから実Cognito/実S3を使った確認もできます。
@@ -467,38 +467,25 @@ powershell -ExecutionPolicy Bypass -File migrate.ps1
 
 ## 12. デプロイ（ビルド → ECR → コンテナ起動）
 
-`infra/deploy.ps1`が「ビルド→push→SSMでコンテナ更新」を自動化しますが、**WindowsのPowerShellではECRログインのトークンが壊れて失敗**することがあります。確実なのは**git bash**で手動実行する方法です（どちらでも可）。
+`infra/deploy.ps1`が、Git commit SHAの決定、必要な場合だけのビルドとpush、SSMの配備タグ更新、EC2コンテナ更新を一括で行います。`latest`は使わず、同じタグを上書きできないため、どのコードが稼働しているかを追跡できます。
 
-### 方法A: git bash で手動（推奨）
-```bash
-# アカウントIDとレジストリ
-ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-REG=$ACCOUNT.dkr.ecr.ap-northeast-1.amazonaws.com
-
-# ① ECRログイン
-aws ecr get-login-password --region ap-northeast-1 | docker login --username AWS --password-stdin $REG
-
-# ② ビルド & push（EC2はARMなので linux/arm64、provenanceは無効化）
-docker buildx build --platform linux/arm64 --provenance=false -t $REG/mono-log-app:latest --push .
-
-# ③ EC2のコンテナを更新（SSM経由でpull＋再run）
-INSTANCE=$(aws ec2 describe-instances --region ap-northeast-1 \
-  --filters "Name=tag:Project,Values=mono-log" "Name=instance-state-name,Values=running" \
-  --query "Reservations[0].Instances[0].InstanceId" --output text)
-CID=$(aws ssm send-command --region ap-northeast-1 --instance-ids $INSTANCE \
-  --document-name AWS-RunShellScript \
-  --parameters 'commands=["/usr/local/bin/mono-log-run.sh"]' \
-  --query Command.CommandId --output text)
-aws ssm get-command-invocation --region ap-northeast-1 --command-id $CID --instance-id $INSTANCE \
-  --query "{Status:Status,Err:StandardErrorContent}" --output json
-```
-
-- `--provenance=false`が**必須**: 付けないとbuildxがin-totoアテステーション付きのOCIインデックスをpushし、EC2のDockerが`docker pull`で「unsupported media type application/vnd.in-toto+json」と失敗します。
-
-### 方法B: deploy.ps1（PowerShell。ECRログインが通る環境なら）
+### 通常のデプロイ
 ```powershell
 powershell -ExecutionPolicy Bypass -File deploy.ps1
 ```
+
+- 未コミット変更がある場合は停止します。先に変更をcommitしてください。
+- 既定タグはGit HEADの40文字commit SHAです。同じSHAがECRにあれば既存イメージを再利用します。
+- `--provenance=false`を付けて、EC2のDockerが取得できる単一イメージmanifestとしてpushします。
+- 独自タグが必要な場合だけ`-Tag release-2026-08-19`のように指定できます。
+- 現在タグと直前タグはSSM上の共有状態なので、複数の`deploy.ps1`を同時に実行しないでください。
+
+### 直前のイメージへロールバック
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy.ps1 -Rollback
+```
+
+SSMの`previous_image_tag`が指すイメージを再配備します。成功後は現在タグと直前タグが入れ替わるため、同じコマンドで切り戻しもできます。ECRのライフサイクルにより直近10イメージを超えたものは削除されるため、ロールバックできません。
 
 ### CloudFrontドメインを確認
 ```bash
@@ -586,7 +573,7 @@ terraform apply        # RDS/EC2/CloudFrontを再作成（DNS/CloudFrontドメ�
 | `.ps1`が文字化け/パースエラー | Windows PowerShell 5.1がBOM無しUTF-8をShift-JISと誤読 | スクリプトはASCIIで書く（日本語コメントを避ける） |
 | `terraform apply`が`InvalidBlockDeviceMapping`（20GB<snapshot） | 最新AL2023(ARM) AMIのスナップショットが30GB | `compute.tf`のルートボリュームを30GBに |
 | AWS CLIが`cp932 codec can't encode`で落ちる（git bash） | 出力の非ASCII文字 | サーバ側で`tr -cd`して非ASCIIを除去 |
-| PowerShellでECR push が401/400 | stdinパイプがトークンを破損 | git bashで`--password-stdin`を使う（12章方法A） |
+| PowerShellでECR push が401/400 | stdinパイプがトークンを破損 | `deploy.ps1`を使う（取得したパスワードを`docker login --password`へ直接渡す） |
 
 ---
 

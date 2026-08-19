@@ -4,7 +4,7 @@ AWS 構成: CloudFront → EC2(Docker) → RDS(Postgres) / Cognito / S3。
 コスト削減のため RDS・EC2・CloudFront は普段 destroy しておき、使うときだけ再作成する運用。
 
 ## 前提
-- AWS CLI v2・Docker（buildx 有効）・Terraform 1.9+ が導入済み
+- AWS CLI v2・Docker（buildx 有効）・Terraform 1.9+・Git が導入済み
 - `aws sts get-caller-identity` が通る（default プロファイル）
 - リージョンは `ap-northeast-1`、プロジェクト名は `mono-log`
 - 残存リソース: VPC / Cognito / S3 / ECR / SSM / IAM（destroy していない）
@@ -19,7 +19,7 @@ terraform plan      # 作成内容を確認
 terraform apply     # yes で作成（RDS は数分かかる）
 ```
 - 新しい RDS エンドポイント・EC2・CloudFront が作られ、SSM パラメータと CloudFront オリジンは自動で更新される
-- EC2 はこの時点ではまだアプリ未起動（イメージが ECR に無いため、systemd が 30 秒ごとに再試行中）
+- 初回構築では配備タグが`not-deployed`のためアプリは未起動（systemdが30秒ごとに再試行）。再作成時はSSMに残る固定タグのイメージがECRにあれば自動起動
 
 ### 2. DB マイグレーション（RDS 再作成のたびに1回）
 ```powershell
@@ -33,9 +33,20 @@ powershell -File migrate.ps1
 ```powershell
 powershell -File deploy.ps1
 ```
-- `linux/arm64`（t4g 用）でビルド → ECR へ push → SSM で EC2 のコンテナを更新
+- 作業ツリーがクリーンであることを確認し、Git HEADのcommit SHAを上書き不可のECRタグとして使用
+- 同じSHAのイメージがECRにあれば再ビルドせず再利用。なければ`linux/arm64`（t4g用）でビルドしてpush
+- SSMの`/mono-log/deploy/image_tag`を更新し、EC2がその固定タグをpullしてコンテナを更新
+- 現在タグと直前タグは共有状態のため、複数の`deploy.ps1`を同時に実行しない
 - 最後に表示される CloudFront ドメイン（`xxxx.cloudfront.net`）にブラウザでアクセス
 - 以降アプリのコードを更新したら **3 だけ** 再実行すればよい
+
+### 直前のイメージへ戻す
+```powershell
+powershell -File deploy.ps1 -Rollback
+```
+- SSMの`/mono-log/deploy/previous_image_tag`を読み、ECRに残っていることを確認してから配備
+- 成功すると現在タグと直前タグが入れ替わるため、同じコマンドでもう一度元のイメージへ戻せる
+- ECRは直近10イメージだけを保持するため、それより古いタグはロールバック対象外
 
 ## 課金を止める（使い終わったら）
 RDS・EC2・CloudFront だけ削除します（Cognito/S3/ECR/VPC は残します）。RDS は通常、削除保護が有効なため、最終スナップショットを指定してから削除保護を解除します。
@@ -67,5 +78,5 @@ Remove-Item Env:TF_VAR_db_deletion_safety
 
 ## メモ
 - RDS/EC2/CloudFront は起動中ずっと課金される（最小構成で約 $20〜24/月）。使い終わったら destroy する
-- アプリの設定（DB/Cognito/S3）は EC2 起動時に SSM から読み込む（`/etc/mono-log.env` と `mono-log-run.sh`）
+- アプリの設定（DB/Cognito/S3）と現在の固定イメージタグは EC2 起動時に SSM から読み込む（`/etc/mono-log.env` と `mono-log-run.sh`）
 - ローカル開発は `compose.yaml` の Postgres + `.env.local`。本番とは独立

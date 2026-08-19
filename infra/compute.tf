@@ -142,11 +142,14 @@ resource "aws_instance" "app" {
   subnet_id              = aws_subnet.public_a.id
   vpc_security_group_ids = [aws_security_group.ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
-  depends_on             = [aws_ssm_parameter.cloudfront_origin_verify_secret]
+  depends_on = [
+    aws_ssm_parameter.cloudfront_origin_verify_secret,
+    aws_ssm_parameter.deployed_image_tag,
+  ]
 
   # 起動時に Docker を導入し、ECR からアプリを pull して起動する（SSH 不要・SSM 接続）。
-  # 機密(DB/Cognito/S3)は実行時に SSM から取得。初回はイメージ未 push のため失敗するが、
-  # 30 秒ごとに再試行し、push 後に自動起動する（Restart=on-failure）。
+  # 機密(DB/Cognito/S3)と配備タグは実行時に SSM から取得。初回は配備タグが未設定のため
+  # 30 秒ごとに再試行し、deploy.ps1 がタグを設定してserviceを再起動する。
   user_data = <<-EOF
 #!/bin/bash
 set -euo pipefail
@@ -158,7 +161,7 @@ cat > /etc/mono-log.env <<ENV
 REGION=${var.aws_region}
 PROJECT=${var.project_name}
 REGISTRY=${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com
-IMAGE=${aws_ecr_repository.app.repository_url}:latest
+REPOSITORY=${aws_ecr_repository.app.repository_url}
 ENV
 
 # 起動スクリプト（実行時に SSM から機密を取得して docker run）
@@ -175,6 +178,12 @@ POOL=$(get "/$PROJECT/cognito/user_pool_id" "")
 CLIENT=$(get "/$PROJECT/cognito/client_id" "")
 BUCKET=$(get "/$PROJECT/s3/bucket" "")
 ORIGIN_VERIFY_SECRET=$(get "/$PROJECT/cloudfront/origin_verify_secret" "--with-decryption")
+IMAGE_TAG=$(get "/$PROJECT/deploy/image_tag" "")
+if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "not-deployed" ]; then
+  echo "No deployed image tag is configured in SSM" >&2
+  exit 1
+fi
+IMAGE="$REPOSITORY:$IMAGE_TAG"
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
 docker pull "$IMAGE"
 docker rm -f mono-log >/dev/null 2>&1 || true
