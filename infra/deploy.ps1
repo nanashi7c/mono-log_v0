@@ -48,6 +48,98 @@ function Assert-CleanWorktree {
   }
 }
 
+function Invoke-ContainerDeployment([string]$InstanceId, [string]$Description) {
+  # Restart the service and wait until Docker's HTTP health check succeeds.
+  # The single-quoted here-string keeps Bash variables literal in PowerShell.
+  $RemoteScript = @'
+set -euo pipefail
+
+if ! systemctl restart mono-log.service; then
+  systemctl status mono-log.service --no-pager || true
+  journalctl -u mono-log.service -n 100 --no-pager || true
+  exit 1
+fi
+
+# Dockerfile starts HTTP health checks after 30 seconds. Poll for up to 60 seconds.
+health_attempt=1
+health_max_attempts=30
+health_poll_seconds=2
+while [ "$health_attempt" -le "$health_max_attempts" ]; do
+  health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' mono-log 2>/dev/null || true)
+
+  if [ "$health" = "healthy" ]; then
+    echo "mono-log container is healthy"
+    exit 0
+  fi
+
+  if [ "$health" = "unhealthy" ]; then
+    break
+  fi
+
+  health_attempt=$((health_attempt + 1))
+  sleep "$health_poll_seconds"
+done
+
+echo "mono-log container did not become healthy" >&2
+docker inspect --format '{{json .State.Health}}' mono-log >&2 || true
+docker logs --tail 100 mono-log >&2 || true
+docker rm -f mono-log >&2 || true
+exit 1
+'@
+  $RemoteScript = $RemoteScript -replace "`r`n", "`n"
+
+  $ParametersJson = @{ commands = @($RemoteScript) } | ConvertTo-Json -Compress
+  $TempFileName = "mono-log-deploy-{0}.json" -f ([Guid]::NewGuid().ToString("N"))
+  $TempFile = Join-Path $env:TEMP $TempFileName
+
+  try {
+    Set-Content -Path $TempFile -Value $ParametersJson -Encoding ascii
+    $TempFileUri = "file://" + ($TempFile -replace '\\', '/')
+
+    Write-Host "== $Description =="
+    $CommandId = (& $aws ssm send-command --region $Region --instance-ids $InstanceId `
+        --document-name "AWS-RunShellScript" --parameters $TempFileUri `
+        --query "Command.CommandId" --output text)
+    Assert-NativeCommand "start $Description"
+    Write-Host "SSM command id: $CommandId"
+
+    $Invocation = $null
+    $Deadline = (Get-Date).AddMinutes(10)
+    $RunningStatuses = @("Pending", "InProgress", "Delayed")
+
+    while ((Get-Date) -lt $Deadline) {
+      Start-Sleep -Seconds 5
+      $InvocationJson = (& $aws ssm get-command-invocation --region $Region `
+          --command-id $CommandId --instance-id $InstanceId --output json 2>$null)
+
+      if ($LASTEXITCODE -ne 0) {
+        continue
+      }
+
+      $Invocation = $InvocationJson | ConvertFrom-Json
+      if ($Invocation.Status -notin $RunningStatuses) {
+        break
+      }
+    }
+
+    if (-not $Invocation -or $Invocation.Status -in $RunningStatuses) {
+      throw "$Description timed out while waiting for the SSM command."
+    }
+
+    if ($Invocation.StandardOutputContent) {
+      Write-Host $Invocation.StandardOutputContent.TrimEnd()
+    }
+    if ($Invocation.StandardErrorContent) {
+      Write-Warning $Invocation.StandardErrorContent.TrimEnd()
+    }
+    if ($Invocation.Status -ne "Success") {
+      throw "$Description failed (SSM status: $($Invocation.Status))."
+    }
+  } finally {
+    Remove-Item $TempFile -ErrorAction SilentlyContinue
+  }
+}
+
 if ($Rollback -and $Tag) {
   throw "-Tag and -Rollback cannot be used together."
 }
@@ -112,22 +204,28 @@ $CurrentTag = Get-ParameterValue $ImageTagParameter
 Set-ParameterValue $ImageTagParameter $Tag
 
 try {
-  Write-Host "== refresh container via SSM (pull + re-run) =="
-  $Cmd = (& $aws ssm send-command --region $Region --instance-ids $Instance `
-      --document-name "AWS-RunShellScript" `
-      --parameters 'commands=["systemctl restart mono-log.service"]' `
-      --query "Command.CommandId" --output text)
-  Assert-NativeCommand "start deployment command"
-  Write-Host "SSM command id: $Cmd"
-
-  & $aws ssm wait command-executed --region $Region --command-id $Cmd --instance-id $Instance
-  Assert-NativeCommand "wait for deployment command"
-  & $aws ssm get-command-invocation --region $Region --command-id $Cmd --instance-id $Instance `
-      --query "{Status:Status, Stdout:StandardOutputContent, Stderr:StandardErrorContent}" --output json
-  Assert-NativeCommand "read deployment result"
+  Invoke-ContainerDeployment $Instance "deploy image $Tag and verify container health"
 } catch {
-  Set-ParameterValue $ImageTagParameter $CurrentTag
-  throw
+  $DeploymentFailure = $_.Exception.Message
+  Write-Warning "Deployment failed. Restoring the previous deployment tag."
+
+  try {
+    Set-ParameterValue $ImageTagParameter $CurrentTag
+  } catch {
+    throw "Deployment failed ($DeploymentFailure). Restoring SSM tag $CurrentTag also failed: $($_.Exception.Message)"
+  }
+
+  if ($CurrentTag -and $CurrentTag -ne "not-deployed" -and $CurrentTag -ne $Tag) {
+    try {
+      Invoke-ContainerDeployment $Instance "restore image $CurrentTag and verify container health"
+    } catch {
+      throw "Deployment failed ($DeploymentFailure). Automatic rollback to $CurrentTag also failed: $($_.Exception.Message)"
+    }
+
+    throw "Deployment failed ($DeploymentFailure). Previous image $CurrentTag was restored and verified healthy."
+  }
+
+  throw "Deployment failed ($DeploymentFailure). No previous running image was available for automatic rollback."
 }
 
 if ($CurrentTag -and $CurrentTag -ne "not-deployed" -and $CurrentTag -ne $Tag) {

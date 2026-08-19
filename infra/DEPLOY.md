@@ -36,9 +36,12 @@ powershell -File deploy.ps1
 - 作業ツリーがクリーンであることを確認し、Git HEADのcommit SHAを上書き不可のECRタグとして使用
 - 同じSHAのイメージがECRにあれば再ビルドせず再利用。なければ`linux/arm64`（t4g用）でビルドしてpush
 - SSMの`/mono-log/deploy/image_tag`を更新し、EC2がその固定タグをpullしてコンテナを更新
+- DockerのHTTPヘルスチェックが成功するまで待ち、`healthy`になった場合だけ配備成功として現在タグと直前タグを確定
+- 新しいコンテナが正常にならなければ、SSMのタグを元に戻し、直前まで稼働していたイメージを再起動して`healthy`になるまで確認
+- 初回配備で直前のイメージがない場合は、失敗したコンテナを削除してタグを`not-deployed`へ戻すため、原因を修正して再実行
 - 現在タグと直前タグは共有状態のため、複数の`deploy.ps1`を同時に実行しない
 - 最後に表示される CloudFront ドメイン（`xxxx.cloudfront.net`）にブラウザでアクセス
-- `https://xxxx.cloudfront.net/api/health`が`{"status":"ok"}`を返すことを確認
+- `https://xxxx.cloudfront.net/api/health`が`{"status":"ok"}`を返すことを確認。スクリプト内の確認はEC2内部から行うため、この手動確認でCloudFrontを含む公開経路全体も確認する
 - 以降アプリのコードを更新したら **3 だけ** 再実行すればよい
 
 ### 直前のイメージへ戻す
@@ -47,6 +50,7 @@ powershell -File deploy.ps1 -Rollback
 ```
 - SSMの`/mono-log/deploy/previous_image_tag`を読み、ECRに残っていることを確認してから配備
 - 成功すると現在タグと直前タグが入れ替わるため、同じコマンドでもう一度元のイメージへ戻せる
+- ロールバック先が正常にならなければ、開始前に稼働していたイメージへ自動的に戻す
 - ECRは直近10イメージだけを保持するため、それより古いタグはロールバック対象外
 
 ## 課金を止める（使い終わったら）
