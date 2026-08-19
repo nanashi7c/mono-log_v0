@@ -142,6 +142,7 @@ resource "aws_instance" "app" {
   subnet_id              = aws_subnet.public_a.id
   vpc_security_group_ids = [aws_security_group.ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
+  depends_on             = [aws_ssm_parameter.cloudfront_origin_verify_secret]
 
   # 起動時に Docker を導入し、ECR からアプリを pull して起動する（SSH 不要・SSM 接続）。
   # 機密(DB/Cognito/S3)は実行時に SSM から取得。初回はイメージ未 push のため失敗するが、
@@ -173,6 +174,7 @@ DB_PASSWORD=$(get "/$PROJECT/db/app_password" "--with-decryption")
 POOL=$(get "/$PROJECT/cognito/user_pool_id" "")
 CLIENT=$(get "/$PROJECT/cognito/client_id" "")
 BUCKET=$(get "/$PROJECT/s3/bucket" "")
+ORIGIN_VERIFY_SECRET=$(get "/$PROJECT/cloudfront/origin_verify_secret" "--with-decryption")
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
 docker pull "$IMAGE"
 docker rm -f mono-log >/dev/null 2>&1 || true
@@ -183,6 +185,7 @@ docker run -d --name mono-log --restart unless-stopped -p 80:3000 \
   -e AWS_REGION="$REGION" \
   -e COGNITO_USER_POOL_ID="$POOL" -e COGNITO_CLIENT_ID="$CLIENT" \
   -e S3_IMAGE_BUCKET="$BUCKET" \
+  -e CLOUDFRONT_ORIGIN_VERIFY_SECRET="$ORIGIN_VERIFY_SECRET" \
   "$IMAGE"
 SCRIPT
 chmod +x /usr/local/bin/mono-log-run.sh

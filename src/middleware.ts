@@ -1,9 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
+import {
+  CLOUDFRONT_ORIGIN_VERIFY_HEADER,
+  isOriginRequestAllowed,
+} from "@/lib/origin-verification";
 
 // 認証不要のパス（ランディング・認証系）
 const PUBLIC_PREFIXES = ["/", "/login", "/signup", "/confirm"];
 
 const SESSION_COOKIES = ["ml_id", "ml_access", "ml_refresh"];
+
+const SESSION_AUTH_EXEMPT_PREFIXES = ["/api", "/_next"];
+const PUBLIC_ASSET_PATH = /\.(?:svg|png|jpg|jpeg|gif|webp)$/;
 
 const cookieOpts = {
   httpOnly: true,
@@ -63,9 +70,29 @@ async function refreshTokens(
 }
 
 export async function middleware(request: NextRequest) {
+  const presentedOriginSecret = request.headers.get(
+    CLOUDFRONT_ORIGIN_VERIFY_HEADER,
+  );
+  if (
+    !isOriginRequestAllowed(
+      presentedOriginSecret,
+      process.env.CLOUDFRONT_ORIGIN_VERIFY_SECRET,
+    )
+  ) {
+    return new NextResponse(null, { status: 403 });
+  }
+
+  const path = request.nextUrl.pathname;
+  const skipsSessionAuthentication =
+    SESSION_AUTH_EXEMPT_PREFIXES.some(
+      (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+    ) ||
+    path === "/favicon.ico" ||
+    PUBLIC_ASSET_PATH.test(path);
+  if (skipsSessionAuthentication) return NextResponse.next();
+
   const idToken = request.cookies.get("ml_id")?.value;
   const refreshToken = request.cookies.get("ml_refresh")?.value;
-  const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PREFIXES.some(
     (p) => path === p || (p !== "/" && path.startsWith(`${p}/`)),
   );
@@ -112,11 +139,3 @@ export async function middleware(request: NextRequest) {
 
   return applyRefreshed(NextResponse.next({ request }));
 }
-
-export const config = {
-  matcher: [
-    // api は各 Route Handler が Bearer 認証を行うため middleware の対象外にする
-    // （対象に含めると未ログイン扱いで /login へリダイレクトされ JSON を返せない）。
-    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
-  ],
-};

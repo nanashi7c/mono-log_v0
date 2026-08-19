@@ -324,15 +324,45 @@ export async function setIdAndAccess(idToken: string, accessToken: string): Prom
 
 ---
 
-## Step 4. `src/middleware.ts` を作成
+## Step 4-1. `src/lib/origin-verification.ts` を作成
+
+```ts
+export const CLOUDFRONT_ORIGIN_VERIFY_HEADER =
+  "x-mono-log-origin-verify" as const;
+
+export function isOriginRequestAllowed(
+  presentedSecret: string | null,
+  expectedSecret: string | undefined,
+): boolean {
+  if (expectedSecret === undefined) return true;
+  return expectedSecret.length > 0 && presentedSecret === expectedSecret;
+}
+```
+
+**逐行解説**
+- `CLOUDFRONT_ORIGIN_VERIFY_HEADER`: TerraformのCloudFront origin設定と共有するヘッダー名。HTTPヘッダー名は大文字小文字を区別しないため、取得側は小文字で統一する。
+- `isOriginRequestAllowed`: リクエストのヘッダー値と本番コンテナの環境変数を比較する純粋関数。
+- 環境変数自体が未設定なら許可する。これによりCloudFrontを使わないローカル開発やVercelを維持する。
+- 環境変数が空文字なら設定ミスとして全要求を拒否する。秘密値が設定された本番EC2では完全一致だけを許可する。
+
+---
+
+## Step 4-2. `src/middleware.ts` を作成
 
 ```ts
 import { NextResponse, type NextRequest } from "next/server";
+import {
+  CLOUDFRONT_ORIGIN_VERIFY_HEADER,
+  isOriginRequestAllowed,
+} from "@/lib/origin-verification";
 
 // 認証不要のパス（ランディング・認証系）
 const PUBLIC_PREFIXES = ["/", "/login", "/signup", "/confirm"];
 
 const SESSION_COOKIES = ["ml_id", "ml_access", "ml_refresh"];
+
+const SESSION_AUTH_EXEMPT_PREFIXES = ["/api", "/_next"];
+const PUBLIC_ASSET_PATH = /\.(?:svg|png|jpg|jpeg|gif|webp)$/;
 
 const cookieOpts = {
   httpOnly: true,
@@ -392,9 +422,29 @@ async function refreshTokens(
 }
 
 export async function middleware(request: NextRequest) {
+  const presentedOriginSecret = request.headers.get(
+    CLOUDFRONT_ORIGIN_VERIFY_HEADER,
+  );
+  if (
+    !isOriginRequestAllowed(
+      presentedOriginSecret,
+      process.env.CLOUDFRONT_ORIGIN_VERIFY_SECRET,
+    )
+  ) {
+    return new NextResponse(null, { status: 403 });
+  }
+
+  const path = request.nextUrl.pathname;
+  const skipsSessionAuthentication =
+    SESSION_AUTH_EXEMPT_PREFIXES.some(
+      (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+    ) ||
+    path === "/favicon.ico" ||
+    PUBLIC_ASSET_PATH.test(path);
+  if (skipsSessionAuthentication) return NextResponse.next();
+
   const idToken = request.cookies.get("ml_id")?.value;
   const refreshToken = request.cookies.get("ml_refresh")?.value;
-  const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PREFIXES.some(
     (p) => path === p || (p !== "/" && path.startsWith(`${p}/`)),
   );
@@ -439,27 +489,23 @@ export async function middleware(request: NextRequest) {
 
   return applyRefreshed(NextResponse.next({ request }));
 }
-
-export const config = {
-  matcher: [
-    // api は各 Route Handler が Bearer 認証を行うため middleware の対象外にする
-    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
-  ],
-};
 ```
 **逐行解説**
 - `PUBLIC_PREFIXES`: 認証不要パス。`SESSION_COOKIES`: 失効時に消すCookie。`cookieOpts`: 応答に載せる属性。
+- `SESSION_AUTH_EXEMPT_PREFIXES`/`PUBLIC_ASSET_PATH`: API、Next.js内部ファイル、公開画像には画面用Cookie認証を適用しない。ただしオリジン検証はその前に全リクエストへ適用する。
 - `decodeExp`: JWTの`exp`を**署名検証せず**読む。`token.split(".")[1]`=ペイロード、`atob(... base64url→base64 ...)`で復号、`JSON.parse(...).exp`。
 - `isExpired`: `exp`がnullか、`exp*1000`(ms)が現在以下なら失効。
 - `refreshTokens`: SDKでなく`fetch`でCognitoのHTTP APIを直叩き(Edge対応・公開クライアント)。`X-Amz-Target:...InitiateAuth`＋`REFRESH_TOKEN_AUTH`。失敗/欠落は`null`。
 - `middleware(request)`本体:
+  - 最初にCloudFrontの秘密ヘッダーを環境変数と比較し、不一致なら本文なしの403を返す。
+  - API・Next.js内部ファイル・公開画像はオリジン検証後に続行する。API固有のBearer認証は各Route Handlerが行う。
   - Cookieから`idToken`/`refreshToken`、`path`、`isPublic`(公開判定)を求める。
   - `let loggedIn = !isExpired(idToken)`。失効でもリフレッシュトークンがあれば`refreshTokens`で更新し`request.cookies.set`(同リクエストのServer Componentが新トークンを読めるよう要求側も更新)。
   - `applyRefreshed(res)`: 新トークンを応答(ブラウザ)にも載せる。
   - `if (!loggedIn && !isPublic)`: 未ログインで保護ルート→`/login`へ。`redirect`クエリで戻り先記憶、失効Cookie削除でループ防止。
   - `if (loggedIn && (/login|/signup))`: ログイン済みは`/items`へ。
   - 既定は`NextResponse.next({ request })`で続行。
-- `config.matcher`: 適用パス。`(?!api|_next/...)`で**api・静的・画像を除外**。
+- matcherを置かず全パスへmiddlewareを適用する。セッション認証の対象外判定を関数内へ移すことで、APIや静的ファイルもオリジン検証の対象にできる。
 
 ---
 
