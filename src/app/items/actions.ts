@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { notFound, redirect } from "next/navigation";
 import { parseItemForm } from "@/features/items/adapters/parse-item-form";
 import { deleteItemUseCase } from "@/features/items/application/item-delete-use-case";
+import { ItemWriteRejectedError } from "@/features/items/application/item-write-error";
 import type { ItemUpdateResult } from "@/features/items/application/item-write-ports";
 import {
   createItemUseCase,
@@ -32,6 +33,16 @@ const itemDeleteDependencies = {
     console.error("アイテム削除後の画像削除に失敗しました。", error);
   },
 } as const;
+
+function itemWriteErrorQueryValue(
+  error: unknown,
+  operation: "作成" | "更新",
+): string {
+  if (error instanceof ItemWriteRejectedError) return error.message;
+
+  console.error(`アイテムの${operation}に失敗しました。`, error);
+  return "save-failed";
+}
 
 async function authed() {
   const user = await getCurrentUser();
@@ -70,7 +81,9 @@ export async function createItem(formData: FormData) {
       imageUploadId: parsed.imageUploadId,
     });
   } catch (error) {
-    redirect(`/items/new?error=${encodeURIComponent((error as Error).message)}`);
+    redirect(
+      `/items/new?error=${encodeURIComponent(itemWriteErrorQueryValue(error, "作成"))}`,
+    );
   }
 
   revalidateAll(newId);
@@ -99,7 +112,7 @@ export async function updateItem(itemId: number, formData: FormData) {
     });
   } catch (error) {
     redirect(
-      `/items/${itemId}/edit?error=${encodeURIComponent((error as Error).message)}`,
+      `/items/${itemId}/edit?error=${encodeURIComponent(itemWriteErrorQueryValue(error, "更新"))}`,
     );
   }
 

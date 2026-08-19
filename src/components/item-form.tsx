@@ -42,6 +42,19 @@ type Props = Readonly<{
   error?: string;
 }>;
 
+function itemFormErrorMessage(error: string | undefined): string | null {
+  switch (error) {
+    case undefined:
+      return null;
+    case "name-required":
+      return "名前を入力してください。";
+    case "save-failed":
+      return "アイテムを保存できませんでした。時間をおいてもう一度お試しください。";
+    default:
+      return error;
+  }
+}
+
 export default function ItemForm({
   mode,
   item,
@@ -62,6 +75,7 @@ export default function ItemForm({
 }: Props) {
   const [status, setStatus] = useState<ItemStatus>(item?.status ?? "owned");
   const [isImageUploading, setIsImageUploading] = useState(false);
+  const errorMessage = itemFormErrorMessage(error);
 
   return (
     <div className={styles.container}>
@@ -74,7 +88,7 @@ export default function ItemForm({
         </Link>
       </div>
 
-      {error ? <p className={styles.error}>{decodeURIComponent(error)}</p> : null}
+      {errorMessage ? <p className={styles.error}>{errorMessage}</p> : null}
 
       <form
         action={action}

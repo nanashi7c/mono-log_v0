@@ -28,6 +28,7 @@ describe("parseItemForm", () => {
           newCategoryNames: ["趣味", "売却候補"],
           janCode: "1234567890123",
           quantity: 2,
+          purchasedAt: null,
           listing: {
             sellingPrice: 1000,
           },
@@ -42,6 +43,34 @@ describe("parseItemForm", () => {
     formData.set("quantity", "0");
 
     expect(parseItemForm(formData).ok).toBe(false);
+  });
+
+  it.each(["2026-08-20", "9999-12-31"])(
+    "実在する購入日%sを受け付ける",
+    (purchasedAt) => {
+      const formData = validFormData();
+      formData.set("purchased_at", purchasedAt);
+
+      expect(parseItemForm(formData)).toMatchObject({
+        ok: true,
+        value: { input: { purchasedAt } },
+      });
+    },
+  );
+
+  it.each([
+    "200045-03-04",
+    "0000-01-01",
+    "2026-02-30",
+    "2026-08-20T00:00:00Z",
+  ])("不正な購入日%jを拒否する", (purchasedAt) => {
+    const formData = validFormData();
+    formData.set("purchased_at", purchasedAt);
+
+    expect(parseItemForm(formData)).toEqual({
+      ok: false,
+      error: "購入日はYYYY-MM-DD形式の正しい日付で入力してください。",
+    });
   });
 
   it("フォームで選択できないsoldはownedへ戻す", () => {

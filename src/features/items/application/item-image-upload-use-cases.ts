@@ -4,6 +4,7 @@ import type {
   PendingItemImageUpload,
   PendingItemImageUploadRepository,
 } from "@/features/items/application/item-image-upload-ports";
+import { ItemWriteRejectedError } from "@/features/items/application/item-write-error";
 
 export const ITEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 const SIGNED_UPLOAD_TTL_SECONDS = 5 * 60;
@@ -138,11 +139,11 @@ export async function verifyPendingItemImageUpload(
 ): Promise<void> {
   const upload = await dependencies.repository.findById(userId, uploadId);
   if (!upload || upload.expiresAtEpochMs <= dependencies.now()) {
-    throw new Error("画像アップロードの有効期限が切れました。画像を選択し直してください。");
+    throw new ItemWriteRejectedError("image_upload_expired");
   }
   const storedImage = await dependencies.objectStore.inspect(upload.objectKey);
   if (!storedImage) {
-    throw new Error("画像のアップロードが完了していません。もう一度お試しください。");
+    throw new ItemWriteRejectedError("image_upload_incomplete");
   }
   if (
     storedImage.contentType !== upload.contentType ||
@@ -150,6 +151,6 @@ export async function verifyPendingItemImageUpload(
     storedImage.size < 1 ||
     storedImage.size > ITEM_IMAGE_MAX_BYTES
   ) {
-    throw new Error("アップロードされた画像の形式または容量が不正です。画像を選択し直してください。");
+    throw new ItemWriteRejectedError("invalid_image_upload");
   }
 }

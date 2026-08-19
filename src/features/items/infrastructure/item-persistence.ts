@@ -1,4 +1,5 @@
 import type { Tx } from "@/db/client";
+import { ItemWriteRejectedError } from "@/features/items/application/item-write-error";
 import type { ItemWriteInput } from "@/features/items/application/item-write-input";
 import { computeListingMetrics } from "@/lib/listing-calc";
 import { fitsSignedDecimal10 } from "@/lib/validation/numeric";
@@ -38,9 +39,7 @@ export async function resolveCategoryIds(
         });
 
   if (visibleCategories.length !== requestedIds.length) {
-    throw new Error(
-      "選択されたカテゴリが存在しないか、このユーザーには利用できません。",
-    );
+    throw new ItemWriteRejectedError("invalid_categories");
   }
 
   const ids = new Set(visibleCategories.map(({ id }) => id));
@@ -169,9 +168,7 @@ export async function syncItemListing(
     metrics.ordinary_profit,
   ];
   if (!calculatedValues.every(fitsSignedDecimal10)) {
-    throw new Error(
-      "入力値から算出される費用または利益が、保存可能な範囲を超えています。",
-    );
+    throw new ItemWriteRejectedError("calculated_values_out_of_range");
   }
 
   const data = {

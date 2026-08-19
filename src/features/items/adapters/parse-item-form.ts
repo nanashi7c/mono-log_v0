@@ -1,6 +1,7 @@
 import type { ItemWriteInput } from "@/features/items/application/item-write-input";
 import { isEditableItemStatus } from "@/features/items/domain/status";
 import { parseActualPrice } from "@/lib/validation/actual-price";
+import { parseOptionalDateOnly } from "@/lib/validation/date-only";
 import {
   DECIMAL_8_2_MAX,
   DECIMAL_10_0_MAX,
@@ -29,6 +30,16 @@ function stringOrNull(value: FormDataEntryValue | null): string | null {
 export function parseItemForm(formData: FormData): ParseItemFormResult {
   const actualPrice = parseActualPrice(formData.get("actual_price"));
   if (!actualPrice.ok) return actualPrice;
+
+  const purchasedAt = parseOptionalDateOnly(formData.get("purchased_at"), {
+    label: "購入日",
+  });
+  if (!purchasedAt.ok) {
+    return {
+      ok: false,
+      error: "購入日はYYYY-MM-DD形式の正しい日付で入力してください。",
+    };
+  }
 
   const quantityResult = parseOptionalInteger(formData.get("quantity"), {
     label: "数量",
@@ -166,7 +177,7 @@ export function parseItemForm(formData: FormData): ParseItemFormResult {
         quantity,
         notes: stringOrNull(formData.get("notes")),
         actualPrice: actualPrice.value,
-        purchasedAt: stringOrNull(formData.get("purchased_at")),
+        purchasedAt: purchasedAt.value,
         plan: {
           plannedPurchaseYear: plannedPurchaseYear.value,
           plannedPurchaseMonth: plannedPurchaseMonth.value,
