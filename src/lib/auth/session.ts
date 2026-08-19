@@ -1,5 +1,11 @@
 import { cookies } from "next/headers";
 import { type AuthTokens, verifyIdToken } from "./cognito";
+import {
+  DEMO_SESSION_COOKIE,
+  getDemoAccountConfig,
+  isDemoUserId,
+  isValidDemoSessionToken,
+} from "./demo-account";
 
 const ID_COOKIE = "ml_id";
 const ACCESS_COOKIE = "ml_access";
@@ -15,6 +21,7 @@ const baseCookie = {
 // トークンを httpOnly Cookie に保存（login 成功時に呼ぶ）
 export async function setSession(tokens: AuthTokens): Promise<void> {
   const store = await cookies();
+  store.delete(DEMO_SESSION_COOKIE);
   store.set(ID_COOKIE, tokens.idToken, baseCookie);
   store.set(ACCESS_COOKIE, tokens.accessToken, baseCookie);
   // リフレッシュトークンは長め（30日）に保持
@@ -24,12 +31,27 @@ export async function setSession(tokens: AuthTokens): Promise<void> {
   });
 }
 
+export async function setDemoSession(): Promise<void> {
+  const config = getDemoAccountConfig();
+  if (!config) throw new Error("Demo account is not configured correctly.");
+
+  const store = await cookies();
+  store.delete(ID_COOKIE);
+  store.delete(ACCESS_COOKIE);
+  store.delete(REFRESH_COOKIE);
+  store.set(DEMO_SESSION_COOKIE, config.sessionToken, {
+    ...baseCookie,
+    maxAge: 60 * 60 * 8,
+  });
+}
+
 // セッション Cookie を削除（logout 時に呼ぶ）
 export async function clearSession(): Promise<void> {
   const store = await cookies();
   store.delete(ID_COOKIE);
   store.delete(ACCESS_COOKIE);
   store.delete(REFRESH_COOKIE);
+  store.delete(DEMO_SESSION_COOKIE);
 }
 
 // auth_time は ID トークンの認証時刻（秒）。最終ログイン表示に使う。
@@ -39,10 +61,17 @@ export type CurrentUser = { sub: string; email: string; authTime: number | null 
 // トークンの更新（期限切れ時の refresh）は middleware 側で行う。
 export async function getCurrentUser(): Promise<CurrentUser | null> {
   const store = await cookies();
+  if (isValidDemoSessionToken(store.get(DEMO_SESSION_COOKIE)?.value)) {
+    const config = getDemoAccountConfig();
+    if (config) {
+      return { sub: config.userId, email: config.email, authTime: null };
+    }
+  }
   const idToken = store.get(ID_COOKIE)?.value;
   if (!idToken) return null;
   try {
     const payload = await verifyIdToken(idToken);
+    if (isDemoUserId(payload.sub)) return null;
     return {
       sub: payload.sub,
       email: payload.email as string,

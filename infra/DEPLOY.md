@@ -9,7 +9,7 @@ AWS 構成: CloudFront → EC2(Docker) → RDS(Postgres) / Cognito / S3。
 - リージョンは `ap-northeast-1`、プロジェクト名は `mono-log`
 - 残存リソース: VPC / Cognito / S3 / ECR / SSM / IAM（destroy していない）
 
-## 再デプロイ（3ステップ）
+## 再デプロイ（4ステップ）
 
 ### 1. インフラを再作成（RDS / EC2 / CloudFront）
 ```powershell
@@ -61,6 +61,21 @@ powershell -File deploy.ps1
 - `https://xxxx.cloudfront.net/api/health`が`{"status":"ok"}`を返すことを確認。スクリプト内の確認はEC2内部から行うため、この手動確認でCloudFrontを含む公開経路全体も確認する
 - 以降アプリのコードを更新したら **3 だけ** 再実行すればよい
 
+### 4. 公開デモを保護して初期化
+
+初回導入時とデモ設定を変更したときに実行します。公開認証情報でCognito APIを直接操作されないよう、同じメールの旧Cognitoユーザーを無効化してから、アプリ経由で固定デモUUIDの初期データを作成します。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File configure-demo.ps1
+```
+
+- SSMの`/mono-log/demo/user_id`と`/mono-log/demo/email`を読み、同じ旧Cognitoユーザーが存在する場合は、IDとメールが一致したときだけ既存セッションを失効させて無効化する
+- 実行中EC2へSSM Run Commandを送り、RLS付きトランザクションでデモユーザーのデータだけを初期状態へ戻す
+- `Public demo setup completed successfully.`が表示されれば成功
+- 通常ユーザーのCognitoアカウントとDBデータは対象外
+- 以降はEC2のsystemd timerが毎日18:00 UTC（日本時間03:00、最大5分のランダム遅延）に同じ初期化を実行
+- デモのメール・パスワードはREADMEで意図的に公開する値。Cookie署名用トークンとリセット用秘密値はTerraformが生成し、SSM SecureStringにのみ保存する
+
 ### アプリログを確認
 
 通常の障害調査ではCloudWatch Logsを確認します。通常の課金停止手順でEC2を削除した後も、ロググループを残すためログは14日間保持されます。
@@ -110,5 +125,5 @@ Remove-Item Env:TF_VAR_db_deletion_safety
 
 ## メモ
 - RDS/EC2/CloudFront は起動中ずっと課金される（最小構成で約 $20〜24/月）。使い終わったら destroy する
-- アプリの設定（DB/Cognito/S3）と現在の固定イメージタグは EC2 起動時に SSM から読み込む（`/etc/mono-log.env` と `mono-log-run.sh`）
+- アプリの設定（DB/Cognito/S3/公開デモ）と現在の固定イメージタグは EC2 起動時に SSM から読み込む（`/etc/mono-log.env` と `mono-log-run.sh`）
 - ローカル開発は `compose.yaml` の Postgres + `.env.local`。本番とは独立

@@ -115,6 +115,16 @@
   margin: 0;
 }
 
+.demoNotice {
+  border-radius: 0.375rem;
+  background-color: var(--amber-50);
+  border: 1px solid var(--amber-200);
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--amber-800);
+  margin: 0;
+}
+
 .grid2 {
   display: grid;
   grid-template-columns: minmax(10.5rem, auto) minmax(0, 1fr);

@@ -18,9 +18,14 @@ import {
   verifyEmailUpdate,
 } from "@/lib/auth/cognito";
 import { withUser } from "@/db/client";
+import { isDemoUserId } from "@/lib/auth/demo-account";
 
 function back(qs: string): never {
   redirect(`/mypage?${qs}`);
+}
+
+function rejectProtectedDemoAccount(userId: string): void {
+  if (isDemoUserId(userId)) back("error=demo-account-protected");
 }
 
 export async function updateProfile(formData: FormData) {
@@ -48,6 +53,7 @@ export async function changePassword(formData: FormData) {
 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  rejectProtectedDemoAccount(user.sub);
   const accessToken = await getAccessToken();
   if (!accessToken) redirect("/login");
 
@@ -65,6 +71,9 @@ export async function requestEmailChange(formData: FormData) {
   const newEmail = String(formData.get("new_email") ?? "").trim().toLowerCase();
   if (!newEmail || !newEmail.includes("@")) back("error=email-invalid");
 
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  rejectProtectedDemoAccount(user.sub);
   const accessToken = await getAccessToken();
   if (!accessToken) redirect("/login");
 
@@ -91,6 +100,7 @@ export async function confirmEmailChange(formData: FormData) {
 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  rejectProtectedDemoAccount(user.sub);
   const accessToken = await getAccessToken();
   if (!accessToken) redirect("/login");
 
@@ -130,6 +140,7 @@ export async function deleteAccount(formData: FormData) {
 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  rejectProtectedDemoAccount(user.sub);
   if (!user.email) back("error=email-missing");
 
   // 本人確認: 現パスワードで再ログインを試行する。

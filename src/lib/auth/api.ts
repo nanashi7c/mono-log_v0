@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyIdToken } from "./cognito";
+import { isDemoUserId } from "./demo-account";
 
 const CLIENT_INPUT_DATABASE_ERROR_CODES = new Set([
   "P2000",
@@ -33,6 +34,7 @@ export async function getApiUser(req: NextRequest): Promise<ApiUser | null> {
   if (!token) return null;
   try {
     const payload = await verifyIdToken(token);
+    if (isDemoUserId(payload.sub)) return null;
     return { sub: payload.sub, email: payload.email as string };
   } catch {
     return null; // 署名不正・期限切れ等

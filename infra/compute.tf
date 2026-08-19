@@ -146,6 +146,11 @@ resource "aws_instance" "app" {
     aws_iam_role_policy.cloudwatch_logs,
     aws_ssm_parameter.cloudfront_origin_verify_secret,
     aws_ssm_parameter.deployed_image_tag,
+    aws_ssm_parameter.demo_user_id,
+    aws_ssm_parameter.demo_email,
+    aws_ssm_parameter.demo_password,
+    aws_ssm_parameter.demo_session_token,
+    aws_ssm_parameter.demo_reset_secret,
   ]
 
   # User data runs only at launch, so replace this stateless instance when it changes.
@@ -227,6 +232,11 @@ POOL=$(get "/$PROJECT/cognito/user_pool_id" "")
 CLIENT=$(get "/$PROJECT/cognito/client_id" "")
 BUCKET=$(get "/$PROJECT/s3/bucket" "")
 ORIGIN_VERIFY_SECRET=$(get "/$PROJECT/cloudfront/origin_verify_secret" "--with-decryption")
+DEMO_USER_ID=$(get "/$PROJECT/demo/user_id" "")
+DEMO_USER_EMAIL=$(get "/$PROJECT/demo/email" "")
+DEMO_USER_PASSWORD=$(get "/$PROJECT/demo/password" "--with-decryption")
+DEMO_SESSION_TOKEN=$(get "/$PROJECT/demo/session_token" "--with-decryption")
+DEMO_RESET_SECRET=$(get "/$PROJECT/demo/reset_secret" "--with-decryption")
 IMAGE_TAG=$(get "/$PROJECT/deploy/image_tag" "")
 if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "not-deployed" ]; then
   echo "No deployed image tag is configured in SSM" >&2
@@ -244,6 +254,11 @@ docker run -d --name mono-log --restart unless-stopped -p 80:3000 \
   -e COGNITO_USER_POOL_ID="$POOL" -e COGNITO_CLIENT_ID="$CLIENT" \
   -e S3_IMAGE_BUCKET="$BUCKET" \
   -e CLOUDFRONT_ORIGIN_VERIFY_SECRET="$ORIGIN_VERIFY_SECRET" \
+  -e DEMO_USER_ID="$DEMO_USER_ID" -e DEMO_USER_EMAIL="$DEMO_USER_EMAIL" \
+  -e DEMO_USER_PASSWORD="$DEMO_USER_PASSWORD" \
+  -e DEMO_SESSION_TOKEN="$DEMO_SESSION_TOKEN" \
+  -e DEMO_RESET_SECRET="$DEMO_RESET_SECRET" \
+  -e API_RATE_LIMIT_MAX=120 \
   "$IMAGE"
 SCRIPT
 chmod +x /usr/local/bin/mono-log-run.sh
@@ -268,6 +283,52 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now mono-log.service || true
+
+# 公開デモのデータだけを毎日03:00（日本時間）に初期化する。
+cat > /usr/local/bin/mono-log-demo-reset.sh <<'SCRIPT'
+#!/bin/bash
+set -euo pipefail
+. /etc/mono-log.env
+get_secret() {
+  aws ssm get-parameter --region "$REGION" --name "$1" --with-decryption \
+    --query Parameter.Value --output text
+}
+RESET_SECRET=$(get_secret "/$PROJECT/demo/reset_secret")
+ORIGIN_SECRET=$(get_secret "/$PROJECT/cloudfront/origin_verify_secret")
+curl --fail-with-body --silent --show-error \
+  --request POST http://127.0.0.1/api/internal/demo-reset \
+  --header "Authorization: Bearer $RESET_SECRET" \
+  --header "X-Mono-Log-Origin-Verify: $ORIGIN_SECRET"
+SCRIPT
+chmod +x /usr/local/bin/mono-log-demo-reset.sh
+
+cat > /etc/systemd/system/mono-log-demo-reset.service <<'UNIT'
+[Unit]
+Description=Reset mono-log public demo data
+After=mono-log.service
+Requires=mono-log.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mono-log-demo-reset.sh
+UNIT
+
+cat > /etc/systemd/system/mono-log-demo-reset.timer <<'UNIT'
+[Unit]
+Description=Reset mono-log public demo data every day
+
+[Timer]
+OnCalendar=*-*-* 18:00:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=mono-log-demo-reset.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now mono-log-demo-reset.timer
 EOF
 
   metadata_options {

@@ -3,11 +3,20 @@ import {
   CLOUDFRONT_ORIGIN_VERIFY_HEADER,
   isOriginRequestAllowed,
 } from "@/lib/origin-verification";
+import {
+  DEMO_SESSION_COOKIE,
+  isDemoUserId,
+  isValidDemoSessionToken,
+} from "@/lib/auth/demo-account";
+import {
+  clientIpFromForwardedHeaders,
+  externalApiRateLimiter,
+} from "@/lib/api/rate-limit";
 
 // 認証不要のパス（ランディング・認証系）
 const PUBLIC_PREFIXES = ["/", "/login", "/signup", "/confirm"];
 
-const SESSION_COOKIES = ["ml_id", "ml_access", "ml_refresh"];
+const SESSION_COOKIES = ["ml_id", "ml_access", "ml_refresh", DEMO_SESSION_COOKIE];
 
 const SESSION_AUTH_EXEMPT_PREFIXES = ["/api", "/_next"];
 const PUBLIC_ASSET_PATH = /\.(?:svg|png|jpg|jpeg|gif|webp)$/;
@@ -35,6 +44,18 @@ function decodeExp(token: string | undefined): number | null {
 function isExpired(token: string | undefined): boolean {
   const exp = decodeExp(token);
   return exp == null || exp * 1000 <= Date.now();
+}
+
+function decodeSub(token: string | undefined): string | null {
+  if (!token) return null;
+  try {
+    const part = token.split(".")[1];
+    const json = atob(part.replace(/-/g, "+").replace(/_/g, "/"));
+    const payload = JSON.parse(json) as { sub?: unknown };
+    return typeof payload.sub === "string" ? payload.sub : null;
+  } catch {
+    return null;
+  }
 }
 
 // Cognito の REFRESH_TOKEN_AUTH を fetch で実行（Edge 対応・AWS 認証情報不要の公開クライアント）。
@@ -83,6 +104,30 @@ export async function middleware(request: NextRequest) {
   }
 
   const path = request.nextUrl.pathname;
+  const usesApiRateLimit =
+    path === "/api/v1" ||
+    path.startsWith("/api/v1/") ||
+    path === "/api/internal" ||
+    path.startsWith("/api/internal/");
+  if (usesApiRateLimit) {
+    const decision = externalApiRateLimiter.consume(
+      clientIpFromForwardedHeaders(request.headers),
+    );
+    if (!decision.allowed) {
+      return NextResponse.json(
+        { error: "too many requests" },
+        {
+          status: 429,
+          headers: {
+            "Cache-Control": "no-store",
+            "Retry-After": String(decision.retryAfterSeconds),
+            "X-RateLimit-Limit": String(decision.limit),
+            "X-RateLimit-Remaining": String(decision.remaining),
+          },
+        },
+      );
+    }
+  }
   const skipsSessionAuthentication =
     SESSION_AUTH_EXEMPT_PREFIXES.some(
       (prefix) => path === prefix || path.startsWith(`${prefix}/`),
@@ -93,15 +138,19 @@ export async function middleware(request: NextRequest) {
 
   const idToken = request.cookies.get("ml_id")?.value;
   const refreshToken = request.cookies.get("ml_refresh")?.value;
+  const demoSessionToken = request.cookies.get(DEMO_SESSION_COOKIE)?.value;
   const isPublic = PUBLIC_PREFIXES.some(
     (p) => path === p || (p !== "/" && path.startsWith(`${p}/`)),
   );
 
-  let loggedIn = !isExpired(idToken);
+  const hasDemoSession = isValidDemoSessionToken(demoSessionToken);
+  const hasLegacyDemoIdToken = isDemoUserId(decodeSub(idToken) ?? "");
+  let loggedIn =
+    hasDemoSession || (!hasLegacyDemoIdToken && !isExpired(idToken));
   let refreshed: { idToken: string; accessToken: string } | null = null;
 
   // ID トークンが失効していてもリフレッシュトークンがあれば自動更新を試みる。
-  if (!loggedIn && refreshToken) {
+  if (!loggedIn && refreshToken && !hasLegacyDemoIdToken) {
     refreshed = await refreshTokens(refreshToken);
     if (refreshed) {
       loggedIn = true;
@@ -126,7 +175,9 @@ export async function middleware(request: NextRequest) {
     url.pathname = "/login";
     url.searchParams.set("redirect", path);
     const res = NextResponse.redirect(url);
-    if (idToken || refreshToken) for (const c of SESSION_COOKIES) res.cookies.delete(c);
+    if (idToken || refreshToken || demoSessionToken) {
+      for (const c of SESSION_COOKIES) res.cookies.delete(c);
+    }
     return res;
   }
 

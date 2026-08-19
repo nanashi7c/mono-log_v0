@@ -10,6 +10,7 @@ import {
   updateProfile,
 } from "./actions";
 import styles from "./page.module.css";
+import { isDemoUserId } from "@/lib/auth/demo-account";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   "admin-not-configured": "アカウント削除は管理者設定が必要です。",
   "email-missing": "メールアドレスが取得できません。",
   "email-invalid": "メールアドレスの形式が正しくありません。",
+  "demo-account-protected": "デモアカウントの認証情報とアカウントは変更できません。",
 };
 
 const SUCCESS_MESSAGES: Record<string, string> = {
@@ -63,6 +65,7 @@ export default async function MyPage({
   const username = profile?.username ?? "";
   const createdAt = profile?.createdAt ?? null;
   const lastSignIn = user.authTime != null ? new Date(user.authTime * 1000).toISOString() : null;
+  const isDemoAccount = isDemoUserId(user.sub);
   // 退会は Cognito のセルフサービスで常に可能。
   const adminConfigured = true;
 
@@ -75,6 +78,12 @@ export default async function MyPage({
 
       {errorMsg ? <p className={styles.error}>{errorMsg}</p> : null}
       {okMsg ? <p className={styles.success}>{okMsg}</p> : null}
+
+      {isDemoAccount ? (
+        <p className={styles.demoNotice}>
+          デモアカウントではメールアドレス・パスワードの変更と退会を無効にしています。登録データは毎日初期状態へ戻ります。
+        </p>
+      ) : null}
 
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>アカウント情報</h2>
@@ -106,7 +115,8 @@ export default async function MyPage({
         </form>
       </section>
 
-      <section className={styles.section}>
+      {!isDemoAccount ? (
+        <section className={styles.section}>
         <h2 className={styles.sectionTitle}>メールアドレス変更</h2>
         {verify_email ? (
           <form action={confirmEmailChange}>
@@ -148,9 +158,11 @@ export default async function MyPage({
             </button>
           </form>
         )}
-      </section>
+        </section>
+      ) : null}
 
-      <section className={styles.section}>
+      {!isDemoAccount ? (
+        <section className={styles.section}>
         <h2 className={styles.sectionTitle}>パスワード変更</h2>
         <form action={changePassword}>
           <label className={styles.field}>
@@ -189,9 +201,11 @@ export default async function MyPage({
             パスワードを変更
           </button>
         </form>
-      </section>
+        </section>
+      ) : null}
 
-      <section className={`${styles.section} ${styles.danger}`}>
+      {!isDemoAccount ? (
+        <section className={`${styles.section} ${styles.danger}`}>
         <h2 className={`${styles.sectionTitle} ${styles.dangerTitle}`}>アカウント削除</h2>
         <p className={styles.note}>
           アカウントを削除すると、登録済みのアイテム・購入予定・出品情報・カテゴリがすべて消えます。元に戻すことはできません。
@@ -227,7 +241,8 @@ export default async function MyPage({
             アカウントを削除
           </button>
         </form>
-      </section>
+        </section>
+      ) : null}
     </div>
   );
 }

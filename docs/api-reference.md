@@ -7,6 +7,10 @@ mono-log の外部向け REST API。Next.js の Route Handler（`src/app/api/v1/
 - **認可**: `Authorization: Bearer <Cognito ID トークン>`。RLS により**自分のデータのみ**操作可能
 - **スコープ(v1)**: items / categories / export。画像アップロードと plan・listing は v1 では非対応（画面からのみ）
 
+### レート制限
+
+`/api/v1`は接続元IPごとに1分間120リクエストまで受け付けます。上限を超えた場合は`429 Too Many Requests`を返し、再試行までの秒数を`Retry-After`ヘッダーで通知します。カウンターは現在の単一EC2プロセス内で管理され、アプリの再起動時に初期化されます。
+
 ---
 
 ## 認証

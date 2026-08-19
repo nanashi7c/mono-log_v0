@@ -55,3 +55,27 @@ variable "s3_upload_allowed_origins" {
   type        = list(string)
   default     = ["http://localhost:3000", "http://127.0.0.1:3000"]
 }
+
+variable "demo_account" {
+  description = "READMEで公開するデモログインと、そのデータを所有する固定DBユーザー"
+  type = object({
+    user_id  = string
+    email    = string
+    password = string
+  })
+  default = {
+    user_id  = "c7f46a48-50f1-707a-22c0-bfc1746db566"
+    email    = "test@example.com"
+    password = "Passw0rd"
+  }
+  sensitive = true
+
+  validation {
+    condition = (
+      can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.demo_account.user_id)) &&
+      can(regex("^[^@[:space:]]+@[^@[:space:]]+$", var.demo_account.email)) &&
+      length(var.demo_account.password) >= 8
+    )
+    error_message = "demo_accountにはUUID形式のuser_id、有効なemail、8文字以上のpasswordが必要です。"
+  }
+}
