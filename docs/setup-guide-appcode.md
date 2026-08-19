@@ -899,6 +899,7 @@ async function upsertListing(tx: Tx, itemId: number, parsed: ParsedForm) {
   const platform_fee_rate = await lookupPlatformFeeRate(tx, parsed.listing.platform_id);
 
   const calc = computeListingMetrics({
+    actual_price: parsed.actual_price,
     selling_price: parsed.listing.selling_price,
     packaging_cost: parsed.listing.packaging_cost,
     work_time_hours: parsed.listing.work_time_hours,
@@ -1063,7 +1064,7 @@ export async function deleteItem(itemId: number) {
 - **syncItemCategories**: 中間表を置換(`deleteMany`→`createMany`)。`itemId`は`BigInt(itemId)`。
 - **upsertPlan**: `status`が`planned`のときだけ`tx.plan.upsert({ where:{itemId}, update, create })`(あれば更新/なければ挿入)、それ以外は`deleteMany`。
 - **lookupShippingFee / lookupPlatformFeeRate**: 送料・手数料率をマスタから`findUnique`で取得し`Decimal.toNumber()`で数値化。
-- **upsertListing**: `status`が`listed`のときだけ、送料・手数料率を引いて`computeListingMetrics`で利益計算し、結果を`tx.listing.upsert`。それ以外は`deleteMany`。Prismaの対話TXは逐次が安全なので`Promise.all`は使わない。
+- **upsertListing**: `status`が`listed`のときだけ、送料・手数料率・購入価格を使って`computeListingMetrics`で利益計算し、結果を`tx.listing.upsert`。それ以外は`deleteMany`。Prismaの対話TXは逐次が安全なので`Promise.all`は使わない。
 - **revalidateAll**: 一覧・ダッシュボード等のキャッシュを無効化(更新を反映)。
 - **createItem**: `parseForm`→名前必須チェック→`authed`→`withUser`内で「カテゴリ確定→`tx.item.create`(作成行が返る)→`itemId = Number(row.id)`→中間表/plan/listing同期→画像があればS3保存して`tx.item.update`で`image_url`更新」。`catch`でエラーをURLに載せ、成功で`revalidateAll`＋詳細へ。
 - **updateItem**: `createItem`同様だが、既存`image_url`を`findFirst`で読み`delete_image`/新画像でS3を消し/差し替え、`tx.item.updateMany({ where:{ id: BigInt(itemId) }, data })`で更新（404にせず該当のみ更新）。`...(nextImageUrl !== undefined ? { imageUrl: nextImageUrl } : {})`は**画像変更時だけ`imageUrl`を更新**する条件スプレッド。

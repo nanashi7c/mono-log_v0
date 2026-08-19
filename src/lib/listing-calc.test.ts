@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { computeListingMetrics, type CalcInput } from "@/lib/listing-calc";
 
 const completeInput: CalcInput = {
+  actual_price: 300,
   selling_price: 1_000,
   packaging_cost: 100,
   work_time_hours: 2,
@@ -11,12 +12,12 @@ const completeInput: CalcInput = {
 };
 
 describe("出品利益計算", () => {
-  it("販売手数料・作業費・営業利益・経常利益を計算する", () => {
+  it("販売手数料・作業費・売却手取り・経常利益を計算する", () => {
     expect(computeListingMetrics(completeInput)).toEqual({
       selling_fee: 100,
       work_time_cost: 2_000,
       operating_benefit: 600,
-      ordinary_profit: -1_400,
+      ordinary_profit: -1_700,
       is_listing: false,
     });
   });
@@ -29,7 +30,7 @@ describe("出品利益計算", () => {
         labor_rate: 100,
       }),
     ).toMatchObject({
-      ordinary_profit: 500,
+      ordinary_profit: 200,
       is_listing: true,
     });
   });
@@ -44,6 +45,21 @@ describe("出品利益計算", () => {
       selling_fee: null,
       work_time_cost: 2_000,
       operating_benefit: null,
+      ordinary_profit: null,
+      is_listing: null,
+    });
+  });
+
+  it("購入価格が未入力でも売却手取りまでは計算する", () => {
+    expect(
+      computeListingMetrics({
+        ...completeInput,
+        actual_price: null,
+      }),
+    ).toEqual({
+      selling_fee: 100,
+      work_time_cost: 2_000,
+      operating_benefit: 600,
       ordinary_profit: null,
       is_listing: null,
     });

@@ -1,7 +1,10 @@
 import type { Tx } from "@/db/client";
 import { ItemWriteRejectedError } from "@/features/items/application/item-write-error";
 import type { ItemWriteInput } from "@/features/items/application/item-write-input";
-import { computeListingMetrics } from "@/lib/listing-calc";
+import {
+  computeListingMetrics,
+  computeOrdinaryProfit,
+} from "@/lib/listing-calc";
 import { fitsSignedDecimal10 } from "@/lib/validation/numeric";
 
 async function resolveShippingId(
@@ -135,6 +138,11 @@ export async function syncItemListing(
   input: ItemWriteInput,
 ): Promise<void> {
   if (input.status !== "listed") {
+    await refreshListingProfitForActualPrice(
+      tx,
+      BigInt(itemId),
+      input.actualPrice,
+    );
     return;
   }
 
@@ -154,6 +162,7 @@ export async function syncItemListing(
   );
 
   const metrics = computeListingMetrics({
+    actual_price: input.actualPrice,
     selling_price: input.listing.sellingPrice,
     packaging_cost: input.listing.packagingCost,
     work_time_hours: input.listing.workTimeHours,
@@ -189,5 +198,34 @@ export async function syncItemListing(
     where: { itemId: BigInt(itemId) },
     update: data,
     create: { itemId: BigInt(itemId), ...data },
+  });
+}
+
+export async function refreshListingProfitForActualPrice(
+  tx: Tx,
+  itemId: bigint,
+  actualPrice: number | null,
+): Promise<void> {
+  const listing = await tx.listing.findUnique({
+    where: { itemId },
+    select: { operatingBenefit: true, workTimeCost: true },
+  });
+  if (!listing) return;
+
+  const ordinaryProfit = computeOrdinaryProfit({
+    net_proceeds: listing.operatingBenefit?.toNumber() ?? null,
+    work_time_cost: listing.workTimeCost?.toNumber() ?? null,
+    actual_price: actualPrice,
+  });
+  if (!fitsSignedDecimal10(ordinaryProfit)) {
+    throw new ItemWriteRejectedError("calculated_values_out_of_range");
+  }
+
+  await tx.listing.update({
+    where: { itemId },
+    data: {
+      ordinaryProfit,
+      isListing: ordinaryProfit == null ? null : ordinaryProfit >= 0,
+    },
   });
 }
