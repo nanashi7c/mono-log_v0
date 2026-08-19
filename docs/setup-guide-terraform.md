@@ -120,13 +120,39 @@ variable "project_name" {
   type        = string
   default     = "mono-log"
 }
+
+variable "db_deletion_safety" {
+  description = "RDS の削除保護と最終スナップショットをまとめて制御する。通常は既定値を使用する。"
+  type = object({
+    protection_enabled        = bool
+    final_snapshot_identifier = optional(string)
+  })
+  default = {
+    protection_enabled = true
+  }
+
+  validation {
+    condition = var.db_deletion_safety.protection_enabled ? (
+      var.db_deletion_safety.final_snapshot_identifier == null
+      ) : try(
+      length(var.db_deletion_safety.final_snapshot_identifier) <= 255 &&
+      can(regex("^[A-Za-z][A-Za-z0-9-]*$", var.db_deletion_safety.final_snapshot_identifier)) &&
+      !endswith(var.db_deletion_safety.final_snapshot_identifier, "-") &&
+      !strcontains(var.db_deletion_safety.final_snapshot_identifier, "--"),
+      false
+    )
+    error_message = "削除保護を無効にする場合は、英字で始まり、英数字と単一ハイフンだけを使う255文字以内の final_snapshot_identifier が必要です。通常運用では protection_enabled=true のみを指定してください。"
+  }
+}
 ```
 **逐行解説**
 - `variable "aws_region" { ... }`: 入力変数の定義。`var.aws_region`で参照される。
   - `description`: 説明（`terraform`の表示やドキュメント用）。
   - `type = string`: 文字列型。
   - `default = "ap-northeast-1"`: 未指定時の既定値（指定しなければ東京）。
-- 残り2つ（`aws_profile`/`project_name`）も同形で、既定はそれぞれ`default`/`mono-log`。
+- `aws_profile`/`project_name`の既定値は、それぞれ`default`/`mono-log`。
+- `db_deletion_safety`: 通常は`protection_enabled=true`でRDSの誤削除を防ぐ。保護を解除する場合は、AWSの命名規則を満たす`final_snapshot_identifier`も必須にする。
+- `validation`: 通常モードと意図的な削除モード以外の組み合わせを、AWSへ変更を送る前に拒否する。
 
 ### 1-4. `infra/main.tf`
 ```hcl
@@ -529,8 +555,9 @@ resource "aws_db_instance" "main" {
   auto_minor_version_upgrade = true
   backup_retention_period    = 7
 
-  skip_final_snapshot = true
-  deletion_protection = false
+  deletion_protection       = var.db_deletion_safety.protection_enabled
+  skip_final_snapshot       = var.db_deletion_safety.final_snapshot_identifier == null
+  final_snapshot_identifier = var.db_deletion_safety.final_snapshot_identifier
   tags                = { Name = "${var.project_name}-db" }
 }
 ```
@@ -546,8 +573,9 @@ resource "aws_db_instance" "main" {
 - `publicly_accessible = false`: インターネット非公開。
 - `auto_minor_version_upgrade = true`: マイナー版自動更新。
 - `backup_retention_period = 7`: 自動バックアップ7日保持。
-- `skip_final_snapshot = true`: 削除時に最終スナップショットを取らない（簡易設定。**消すとデータ消滅**。本番ではfalseを検討）。
-- `deletion_protection = false`: 削除保護なし（簡易設定。本番ではtrueを検討）。
+- `deletion_protection`: 通常は`true`となり、RDS APIによる削除を拒否する。
+- `skip_final_snapshot`: 最終スナップショット名がある意図的な削除モードだけ`false`となる。
+- `final_snapshot_identifier`: 削除前に作成するスナップショットの名前。削除保護を解除するときは必須。
 
 ```hcl
 resource "aws_ssm_parameter" "db_host" {
