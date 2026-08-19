@@ -196,7 +196,7 @@ for entry in "${MIGRATION_ENTRIES[@]}"; do
     echo "Migration file not found: $migration" >&2
     exit 1
   fi
-  actual_checksum=$(sed 's/\r$//' "$WORKDIR/$migration" | sha256sum | awk '{print $1}')
+  actual_checksum=$(sed '1s/^\xEF\xBB\xBF//; s/\r$//' "$WORKDIR/$migration" | sha256sum | awk '{print $1}')
   if [ "$actual_checksum" != "$checksum" ]; then
     echo "Migration checksum mismatch after S3 transfer: $migration" >&2
     exit 1
