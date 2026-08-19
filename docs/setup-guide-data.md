@@ -856,7 +856,7 @@ powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot -ListMigr
 
 - `Get-ChildItem ... | Sort-Object Name`: `prisma/migrations`をディレクトリ名の日時順で列挙する。マイグレーション追加時にスクリプトへファイル名を追記する必要はない。
 - `$SnapshotBaselineMigrations`: 保存済みスナップショットに含まれる初期マイグレーションを明示し、復元初回に適用済みとして記録する。
-- `app.schema_migrations`: 適用済みのディレクトリ名とSHA-256を記録し、再実行や将来のSQL追加では未適用分だけを選ぶ。適用済みSQLの内容が変わった場合や、履歴のない既存DBは停止する。
+- `app.schema_migrations`: 適用済みのディレクトリ名と改行コードを正規化したSHA-256を記録し、再実行や将来のSQL追加では未適用分だけを選ぶ。適用済みSQLの変更・削除・改名や、履歴のない既存DBを検知した場合は停止する。
 - `pg_advisory_xact_lock`: DB上の排他ロックを取得した同じ`psql`セッション内で履歴を再判定し、同時実行でも同じSQLを二重適用しない。
 - 実行ごとの一意なS3プレフィックス: 並行実行や前回の一時ファイルとの混在を防ぎ、処理後はローカル・S3・EC2の一時ファイルを削除する。
 - `psql --single-transaction -v ON_ERROR_STOP=1`: 選択した全SQL、適用履歴、`monolog_app`のパスワード更新を1トランザクションにまとめる。1つでも失敗した場合、今回のDB変更は全体がロールバックされる。

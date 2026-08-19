@@ -27,6 +27,19 @@ function Assert-NativeCommand([string]$Description) {
   }
 }
 
+function Get-NormalizedMigrationChecksum([string]$Path) {
+  $Content = [IO.File]::ReadAllText($Path)
+  $NormalizedContent = [Regex]::Replace($Content, "`r(?=`n|$)", "")
+  $Utf8WithoutBom = New-Object Text.UTF8Encoding($false)
+  $Hasher = [Security.Cryptography.SHA256]::Create()
+  try {
+    $Hash = $Hasher.ComputeHash($Utf8WithoutBom.GetBytes($NormalizedContent))
+    return ([BitConverter]::ToString($Hash)).Replace("-", "").ToLowerInvariant()
+  } finally {
+    $Hasher.Dispose()
+  }
+}
+
 $MigrationDirectories = @(Get-ChildItem -Path $MigrationsRoot -Directory | Sort-Object Name)
 if ($MigrationDirectories.Count -eq 0) {
   throw "No Prisma migrations found in $MigrationsRoot"
@@ -68,20 +81,21 @@ $RunId = [Guid]::NewGuid().ToString("N")
 $Prefix = "_deploy/migrations/$RunId"
 $ManifestFile = Join-Path $env:TEMP "mono-log-migrations-$RunId.txt"
 $BaselineManifestFile = Join-Path $env:TEMP "mono-log-migration-baseline-$RunId.txt"
+$RunnerFile = Join-Path $env:TEMP "mono-log-migrate-$RunId.sh"
 $ParametersFile = Join-Path $env:TEMP "mono-log-migrate-$RunId.json"
 $Bucket = $null
 
 try {
   $ManifestEntries = @($SelectedMigrations | ForEach-Object {
       $MigrationFile = Join-Path $_.FullName "migration.sql"
-      $Checksum = (Get-FileHash -Path $MigrationFile -Algorithm SHA256).Hash.ToLowerInvariant()
+      $Checksum = Get-NormalizedMigrationChecksum $MigrationFile
       "$($_.Name).sql|$Checksum"
     })
   $BaselineEntries = @($SnapshotBaselineMigrations | ForEach-Object {
       $BaselineName = $_
       $BaselineDirectory = $MigrationDirectories | Where-Object { $_.Name -eq $BaselineName }
       $BaselineFile = Join-Path $BaselineDirectory.FullName "migration.sql"
-      $Checksum = (Get-FileHash -Path $BaselineFile -Algorithm SHA256).Hash.ToLowerInvariant()
+      $Checksum = Get-NormalizedMigrationChecksum $BaselineFile
       "$BaselineName|$Checksum"
     })
   $ManifestContent = if ($ManifestEntries.Count -eq 0) { "" } else { ($ManifestEntries -join "`n") + "`n" }
@@ -182,7 +196,7 @@ for entry in "${MIGRATION_ENTRIES[@]}"; do
     echo "Migration file not found: $migration" >&2
     exit 1
   fi
-  actual_checksum=$(sha256sum "$WORKDIR/$migration" | awk '{print $1}')
+  actual_checksum=$(sed 's/\r$//' "$WORKDIR/$migration" | sha256sum | awk '{print $1}')
   if [ "$actual_checksum" != "$checksum" ]; then
     echo "Migration checksum mismatch after S3 transfer: $migration" >&2
     exit 1
@@ -299,6 +313,58 @@ SQL
 SQL
 done
 
+for index in "${!BASELINE_MIGRATIONS[@]}"; do
+  printf "select exists(select 1 from app.schema_migrations where name = '%s')::text as baseline_recorded, coalesce((select checksum = '%s' from app.schema_migrations where name = '%s'), false)::text as baseline_checksum_matches;\n" \
+    "${BASELINE_MIGRATIONS[$index]}" "${BASELINE_CHECKSUMS[$index]}" "${BASELINE_MIGRATIONS[$index]}" >> "$WORKDIR/run-migrations.sql"
+  cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\gset
+\if :baseline_recorded
+\if :baseline_checksum_matches
+\else
+\echo 'Applied baseline migration checksum does not match the repository.'
+select 1 / 0;
+\endif
+\else
+\echo 'Migration history is inconsistent: baseline migration is not recorded.'
+select 1 / 0;
+\endif
+SQL
+done
+
+REPOSITORY_MIGRATIONS=()
+declare -A SEEN_MIGRATIONS=()
+for migration_name in "${BASELINE_MIGRATIONS[@]}"; do
+  if [ -z "${SEEN_MIGRATIONS[$migration_name]+present}" ]; then
+    REPOSITORY_MIGRATIONS+=( "$migration_name" )
+    SEEN_MIGRATIONS[$migration_name]=present
+  fi
+done
+for migration in "${MIGRATION_FILES[@]}"; do
+  migration_name=${migration%.sql}
+  if [ -z "${SEEN_MIGRATIONS[$migration_name]+present}" ]; then
+    REPOSITORY_MIGRATIONS+=( "$migration_name" )
+    SEEN_MIGRATIONS[$migration_name]=present
+  fi
+done
+
+repository_names_sql=""
+for migration_name in "${REPOSITORY_MIGRATIONS[@]}"; do
+  if [ -n "$repository_names_sql" ]; then
+    repository_names_sql+=", "
+  fi
+  repository_names_sql+="'$migration_name'"
+done
+printf "select (not exists(select 1 from app.schema_migrations where name not in (%s)))::text as migration_history_matches_repository;\n" \
+  "$repository_names_sql" >> "$WORKDIR/run-migrations.sql"
+cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
+\gset
+\if :migration_history_matches_repository
+\else
+\echo 'Migration history contains a migration that is missing or renamed in the repository.'
+select 1 / 0;
+\endif
+SQL
+
 cat >> "$WORKDIR/run-migrations.sql" <<'SQL'
 ALTER ROLE monolog_app WITH PASSWORD :'app_password';
 SQL
@@ -316,7 +382,13 @@ docker run --rm -e PGPASSWORD="$MPW" -v "$WORKDIR:/m:ro" postgres:16 \
       Replace("__RUN_ID__", $RunId)
   $Bash = $Bash -replace "`r`n", "`n"
 
-  $ParametersJson = @{ commands = @($Bash) } | ConvertTo-Json -Compress
+  [IO.File]::WriteAllText($RunnerFile, $Bash, [Text.UTF8Encoding]::new($false))
+  & $aws s3 cp $RunnerFile "s3://$Bucket/$Prefix/run-migrations.sh" --region $Region | Out-Null
+  Assert-NativeCommand "upload migration runner"
+
+  $RemoteRunner = "/tmp/mono-log-migrate-$RunId.sh"
+  $ShellCommand = "aws s3 cp `"s3://$Bucket/$Prefix/run-migrations.sh`" `"$RemoteRunner`" --region `"$Region`" && bash `"$RemoteRunner`"; result=`$?; rm -f `"$RemoteRunner`"; exit `$result"
+  $ParametersJson = @{ commands = @($ShellCommand) } | ConvertTo-Json -Compress
   Set-Content -Path $ParametersFile -Value $ParametersJson -Encoding ascii
   $ParametersUri = "file://" + ($ParametersFile -replace '\\', '/')
 
@@ -374,5 +446,6 @@ docker run --rm -e PGPASSWORD="$MPW" -v "$WORKDIR:/m:ro" postgres:16 \
   }
   Remove-Item $ManifestFile -ErrorAction SilentlyContinue
   Remove-Item $BaselineManifestFile -ErrorAction SilentlyContinue
+  Remove-Item $RunnerFile -ErrorAction SilentlyContinue
   Remove-Item $ParametersFile -ErrorAction SilentlyContinue
 }
