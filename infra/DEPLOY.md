@@ -18,16 +18,30 @@ terraform init      # 初回や別マシンのみ
 terraform plan      # 作成内容を確認
 terraform apply     # yes で作成（RDS は数分かかる）
 ```
+- 保存済みデータを使う場合は、`plan`と`apply`の両方に同じ`-var="db_snapshot_identifier=<スナップショット名>"`を付ける
 - 新しい RDS エンドポイント・EC2・CloudFront が作られ、SSM パラメータと CloudFront オリジンは自動で更新される
 - 初回構築では配備タグが`not-deployed`のためアプリは未起動（systemdが30秒ごとに再試行）。再作成時はSSMに残る固定タグのイメージがECRにあれば自動起動
 
 ### 2. DB マイグレーション（RDS 再作成のたびに1回）
+
+空のRDSを作成した場合:
+
 ```powershell
 powershell -File migrate.ps1
 ```
-- `0001_init.sql` / `0002_seed.sql` を S3 経由で EC2 に渡し、SSM 経由で RDS に適用
+
+`mono-log-db-20260629`のように初期マイグレーション適用済みのスナップショットから復元した場合:
+
+```powershell
+powershell -File migrate.ps1 -RestoredSnapshot
+```
+
+- 実行前に対象だけ確認する場合は末尾に`-ListMigrations`を付ける。このオプションはAWSへ接続せず、DBも変更しない
+- 空DBでは全マイグレーション、復元DBではスナップショットに含まれる初期2件を除くマイグレーションを日時順に適用する
+- 全SQLを1トランザクションで適用するため、途中で失敗した場合は今回の変更全体がロールバックされる
+- 空DBと復元DBの指定を取り違えた場合は、`public.users`の有無を検査してSQL適用前に停止する
 - 併せて `monolog_app` ロールのパスワードを SSM (`/mono-log/db/app_password`) の値に設定
-- 出力 `Status: Success` を確認
+- `migrations completed successfully`が表示されれば成功
 
 ### 3. アプリをビルドして配備
 ```powershell
@@ -88,7 +102,7 @@ Remove-Item Env:TF_VAR_db_deletion_safety
 - RDSが既に存在しない場合は環境変数を削除し、`aws_db_instance.main`を外してEC2とCloudFrontだけをdestroyする
 - 解除後に削除を中止した場合は、`Remove-Item Env:TF_VAR_db_deletion_safety`の後に`terraform apply -target=aws_db_instance.main`を実行して削除保護を有効に戻す
 - 最終スナップショットはRDS削除後も残り、保存容量に応じて課金される。不要になったら内容を確認してAWS上で削除する
-- 新しい空のRDSで再開する場合は手順2のマイグレーションをやり直す。保存したデータを使う場合は`db_snapshot_identifier`を指定して復元する
+- 新しい空のRDSでは手順2を通常実行する。保存したデータを使う場合は`db_snapshot_identifier`を指定して復元し、手順2を`-RestoredSnapshot`付きで実行する
 - 完全に消す場合は `terraform destroy`（tfstate/S3/Cognito は別管理なので残ることがある）
 
 ## メモ

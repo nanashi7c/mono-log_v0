@@ -19,11 +19,11 @@
 **付録（ゼロから書き起こす場合はこちら）**
 - [付録A: Terraform手順](setup-guide-terraform.md) — 空の`infra/`から作る手順形式（ファイル作成→plan→apply）。全`.tf`の中身入り（10章の詳細）
 - [付録B: 中核アプリ実装手順](setup-guide-appcode.md) — 認証/DB/画像/actionsの中核ファイルをファイル作成→型チェックの手順形式で（完全コード＋逐行解説）
-- [付録D: データ基盤の実装手順](setup-guide-data.md) — マイグレーションSQL・types/schema/serialize・migrate.ps1をファイル作成→適用の手順形式で（完全コード＋逐行解説）
+- [付録D: データ基盤の実装手順](setup-guide-data.md) — マイグレーションSQL・types/schema/serializeを手順形式で解説し、本番DB適用は実装の正本である`infra/migrate.ps1`へ案内
 - [付録C: REST API実装手順](setup-guide-api.md) — 外部向けREST API(`/api/v1`)をファイル作成→確認の手順形式で実装（全コード入り）
 - [APIリファレンス](api-reference.md) — 上記APIの仕様（エンドポイント・curl例）
 
-> 付録A〜Dは各コードブロックに**逐行解説**（1行ずつ何をしているかの説明）を付けています。同型の繰り返し（似たSSMパラメータ・テーブル定義・RLSポリシー等）は最初の1つを詳説し、残りはパターンとしてまとめています。
+> 付録のコードブロックは、同型の繰り返し（似たSSMパラメータ・テーブル定義・RLSポリシー等）を最初の1つで詳説し、残りはパターンとしてまとめています。運用スクリプトは実装との二重管理を避けるため、リポジトリ内の正本を参照します。
 
 ---
 
@@ -457,17 +457,25 @@ terraform apply    # yes で作成。RDS作成に数分かかる
 
 ## 11. 本番DBマイグレーション（migrate.ps1）
 
-RDSは非公開でローカルから`prisma migrate deploy`を直接打てないため、`prisma/migrations`のSQLを**S3経由でEC2に渡し、EC2上の`psql`コンテナからRDSへ適用**します（内容は`migrate deploy`と同一）。`infra/migrate.ps1`が一連を自動化しています（**スクリプト全文は[付録D: データ基盤の実装手順](setup-guide-data.md)**）。**RDSを作り直すたびに1回**実行します。
+RDSは非公開でローカルから`prisma migrate deploy`を直接打てないため、`prisma/migrations`のSQLを**S3経由でEC2に渡し、EC2上の`psql`コンテナからRDSへ適用**します。`infra/migrate.ps1`が一連を自動化しています。**RDSを作り直すたびに1回**、作成方法に合うモードで実行します。
 
 ```powershell
-# infra/ で実行（Windows PowerShell）
+# 空のRDSを作成した場合
 powershell -ExecutionPolicy Bypass -File migrate.ps1
+
+# 初期マイグレーション適用済みスナップショットから復元した場合
+powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot
+
+# AWSやDBを変更せず、選択されるマイグレーションだけ確認する場合
+powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot -ListMigrations
 ```
 
 やっていること:
-- `0001_init.sql` / `0002_seed.sql`をS3にアップ→EC2でダウンロード→`psql`でRDSへ適用
+- `prisma/migrations`を日時順に自動検出し、空DBには全件、復元DBにはスナップショットに含まれない追加分だけを適用
+- 空DBと復元DBの指定ミスを`public.users`の有無で検出し、SQL適用前に停止
+- 選択したSQLを1トランザクションで適用し、途中失敗時は今回の変更全体をロールバック
 - 仕上げに`ALTER ROLE monolog_app WITH PASSWORD '<SSMの app_password>'`で、アプリ用ロールのパスワードを**SSMの強いパスワード**に差し替え（ローカルの`localapppw`から変更）
-- 出力に`Status: Success`が出れば成功
+- 出力に`migrations completed successfully`が出れば成功
 
 > アプリコンテナは`DB_PASSWORD`を同じSSM（`/mono-log/db/app_password`）から読むので、ここで設定した値と自動的に一致します。
 
@@ -575,12 +583,12 @@ unset TF_VAR_db_deletion_safety
 ### 再開するとき
 ```bash
 cd infra
-terraform apply        # RDS/EC2/CloudFrontを再作成（DNS/CloudFrontドメインは新しくなる）
-# → 11章 migrate.ps1（新しいRDSへ）
+terraform apply        # 空のRDS/EC2/CloudFrontを再作成（DNS/CloudFrontドメインは新しくなる）
+# → 11章 migrate.ps1
 # → 12章 deploy（ビルド→push→起動）
 ```
 
-保存したデータから再開する場合は、通常の`terraform apply`の代わりに`terraform apply -var="db_snapshot_identifier=<最終スナップショット名>"`を実行します。
+保存したデータから再開する場合は、`terraform plan`と`terraform apply`の両方に`-var="db_snapshot_identifier=<最終スナップショット名>"`を付けます。その後、11章の`migrate.ps1 -RestoredSnapshot`でスナップショット作成後の追加マイグレーションだけを適用します。
 
 ### コード更新だけのとき
 インフラを消していなければ、**12章のデプロイだけ**再実行すれば反映されます。

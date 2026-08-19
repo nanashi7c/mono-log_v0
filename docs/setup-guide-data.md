@@ -839,93 +839,29 @@ npx tsc --noEmit
 
 ## Step 7. `infra/migrate.ps1` を作成（本番RDSへの適用）
 
-RDSは非公開でローカルから到達できず`prisma migrate deploy`を直接打てないため、**`prisma/migrations`のSQLをS3経由でEC2に渡し、EC2の`psql`コンテナからRDSへ適用**する（適用される内容は`migrate deploy`と同一）。**RDSを作り直すたびに1回**実行（11章）。コメントはASCII（Windows PowerShell 5.1の文字化け回避）。
+RDSは非公開でローカルから到達できず`prisma migrate deploy`を直接実行できないため、**`prisma/migrations`のSQLをS3経由でEC2に渡し、EC2の`psql`コンテナからRDSへ適用**する。実装の正本は[`infra/migrate.ps1`](../infra/migrate.ps1)とし、この付録には運用上の境界だけを記載する。スクリプトを複製するとマイグレーション追加時に手順書だけ古くなるため、全文は重複掲載しない。
 
 ```powershell
-# First-time DB migration to RDS (0001_init.sql / 0002_seed.sql) + set monolog_app password.
-# RDS is private, so SQL is shipped to EC2 via S3 and applied from EC2 over SSM (psql in a container).
-# Prereq: terraform apply done (RDS/EC2 running). Run once per RDS (re)creation.
-# Usage (from infra/):  powershell -ExecutionPolicy Bypass -File migrate.ps1
+# 空のRDS: 全マイグレーションを適用
+powershell -ExecutionPolicy Bypass -File migrate.ps1
 
-$ErrorActionPreference = "Stop"
-$aws = "C:\Program Files\Amazon\AWSCLIV2\aws.exe"
-$Region = "ap-northeast-1"
-$Project = "mono-log"
-$RepoRoot = Split-Path $PSScriptRoot -Parent
-$Prefix = "_deploy/migrations"
+# 初期マイグレーション適用済みスナップショットから復元: 追加分だけ適用
+powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot
 
-# App bucket name (EC2 role can read objects from it).
-$Bucket = (& $aws ssm get-parameter --region $Region --name "/$Project/s3/bucket" --query Parameter.Value --output text)
-
-Write-Host "== upload migration SQL to S3 =="
-& $aws s3 cp "$RepoRoot/prisma/migrations/20260613000000_init/migration.sql" "s3://$Bucket/$Prefix/0001_init.sql" --region $Region
-& $aws s3 cp "$RepoRoot/prisma/migrations/20260613000100_seed/migration.sql" "s3://$Bucket/$Prefix/0002_seed.sql" --region $Region
-
-Write-Host "== find EC2 instance =="
-$Instance = (& $aws ec2 describe-instances --region $Region `
-    --filters "Name=tag:Project,Values=$Project" "Name=instance-state-name,Values=running" `
-    --query "Reservations[0].Instances[0].InstanceId" --output text)
-if (-not $Instance -or $Instance -eq "None") {
-  throw "running EC2 not found (check terraform apply)"
-}
-Write-Host "instance: $Instance"
-
-# Bash to run on EC2. __XXX__ placeholders are replaced with PowerShell values below.
-$bash = @'
-set -euo pipefail
-REGION=__REGION__
-PROJECT=__PROJECT__
-BUCKET=__BUCKET__
-PREFIX=__PREFIX__
-HOST=$(aws ssm get-parameter --region $REGION --name /$PROJECT/db/host --query Parameter.Value --output text)
-MPW=$(aws ssm get-parameter --region $REGION --name /$PROJECT/db/password --with-decryption --query Parameter.Value --output text)
-APW=$(aws ssm get-parameter --region $REGION --name /$PROJECT/db/app_password --with-decryption --query Parameter.Value --output text)
-cd /tmp
-aws s3 cp s3://$BUCKET/$PREFIX/0001_init.sql 0001_init.sql --region $REGION
-aws s3 cp s3://$BUCKET/$PREFIX/0002_seed.sql 0002_seed.sql --region $REGION
-docker run --rm -e PGPASSWORD="$MPW" -v /tmp:/m postgres:16 \
-  psql -h $HOST -U monolog_admin -d monolog -v ON_ERROR_STOP=1 -f /m/0001_init.sql -f /m/0002_seed.sql
-docker run --rm -e PGPASSWORD="$MPW" postgres:16 \
-  psql -h $HOST -U monolog_admin -d monolog -v ON_ERROR_STOP=1 \
-  -c "ALTER ROLE monolog_app WITH PASSWORD '$APW';"
-rm -f /tmp/0001_init.sql /tmp/0002_seed.sql
-'@
-$bash = $bash.Replace("__REGION__", $Region).Replace("__PROJECT__", $Project).Replace("__BUCKET__", $Bucket).Replace("__PREFIX__", $Prefix)
-
-# SSM commands is a JSON array; ConvertTo-Json escapes safely. Pass via file.
-$paramsJson = @{ commands = @($bash) } | ConvertTo-Json -Compress
-$tmp = Join-Path $env:TEMP "mono-log-migrate.json"
-Set-Content -Path $tmp -Value $paramsJson -Encoding ascii
-$tmpUri = "file://" + ($tmp -replace '\\', '/')
-
-Write-Host "== apply migration on RDS from EC2 via SSM =="
-$Cmd = (& $aws ssm send-command --region $Region --instance-ids $Instance `
-    --document-name "AWS-RunShellScript" --parameters $tmpUri `
-    --query "Command.CommandId" --output text)
-Write-Host "SSM command id: $Cmd"
-
-& $aws ssm wait command-executed --region $Region --command-id $Cmd --instance-id $Instance
-& $aws ssm get-command-invocation --region $Region --command-id $Cmd --instance-id $Instance `
-    --query "{Status:Status, Stdout:StandardOutputContent, Stderr:StandardErrorContent}" --output json
-
-# Cleanup uploaded SQL
-& $aws s3 rm "s3://$Bucket/$Prefix/" --recursive --region $Region | Out-Null
-Remove-Item $tmp -ErrorAction SilentlyContinue
-Write-Host "== done =="
+# AWSやDBを変更せず、選択対象だけ確認
+powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot -ListMigrations
 ```
-**逐行解説**
-- `$ErrorActionPreference = "Stop"`: エラーで即停止。`$aws`はAWS CLIのパス。`$Region/$Project`は既定。
-- `$RepoRoot = Split-Path $PSScriptRoot -Parent`: スクリプトの親＝リポジトリルート。`$Prefix`はS3一時置き場。
-- `$Bucket = (& $aws ssm get-parameter ... /s3/bucket ...)`: SSMからバケット名取得。
-- `& $aws s3 cp <ローカルSQL> s3://...`: SQL2本をS3へアップロード。
-- `describe-instances --filters "Name=tag:Project..." "Name=instance-state-name,Values=running"`: 対象EC2を特定（` `` `は行継続）。`--query "Reservations[0].Instances[0].InstanceId"`でID取得。見つからなければ`throw`。
-- `$bash = @' ... '@`: EC2で動かすbash。`@'...'@`は**中の`$`を展開しない**PowerShell文字列(bashの`$`を残すため)。`__XXX__`は下の`.Replace`で実値に差し替え。
-  - bash内: `set -euo pipefail`(安全)、`HOST/MPW/APW`をSSMから(`--with-decryption`で復号)、S3からSQL取得、`docker run ... psql -U monolog_admin ... -f`で2本適用、もう1つの`docker run ... -c "ALTER ROLE monolog_app WITH PASSWORD '$APW'"`で**アプリ用パスワードをSSMの値へ**差し替え、一時SQL削除。
-- `@{ commands = @($bash) } | ConvertTo-Json -Compress`: SSMの`{"commands":[...]}`形式JSONを生成。`Set-Content ... -Encoding ascii`でBOM混入回避。`file://`URIに変換。
-- `aws ssm send-command --document-name "AWS-RunShellScript" --parameters $tmpUri`: EC2上で上のbashを実行(SSH不要)。`wait command-executed`で完了待ち、`get-command-invocation`で`Status: Success`確認。
-- `aws s3 rm ... --recursive` / `Remove-Item $tmp`: 一時ファイル掃除。
 
-> ローカルは上記`psql`部分をStep 6で実行済み。`monolog_app`は`0001`が`localapppw`で自動作成するためローカルでは`ALTER ROLE`不要。
+**処理の要点**
+
+- `Get-ChildItem ... | Sort-Object Name`: `prisma/migrations`をディレクトリ名の日時順で列挙する。マイグレーション追加時にスクリプトへファイル名を追記する必要はない。
+- `$SnapshotBaselineMigrations`: 保存済みスナップショットに含まれる初期マイグレーションを明示し、復元モードでは除外する。
+- `public.users`の存在確認: 空DBと復元DBのモード指定を取り違えた場合、変更前に停止する。
+- 実行ごとの一意なS3プレフィックス: 並行実行や前回の一時ファイルとの混在を防ぎ、処理後はローカル・S3・EC2の一時ファイルを削除する。
+- `psql --single-transaction -v ON_ERROR_STOP=1`: 選択した全SQLと`monolog_app`のパスワード更新を1トランザクションにまとめる。1つでも失敗した場合、今回のDB変更は全体がロールバックされる。
+- SSMコマンドの状態を最大10分ポーリングし、`Success`以外を失敗として扱う。`migrations completed successfully`が表示されれば完了。
+
+> `-RestoredSnapshot`は、現在保存している初期2件適用済みスナップショット向けである。将来、より新しいマイグレーションを含むスナップショットを基準にする場合は、`$SnapshotBaselineMigrations`とこの説明を同じPRで更新する。
 
 ---
 
