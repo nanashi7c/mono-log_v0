@@ -29,6 +29,7 @@
 | 画像 | S3（非公開）＋ 署名付き GET / POST。画像本体はブラウザからS3へ直接送信 |
 | API | 外部向け REST `/api/v1`（Cognito の Bearer トークン認証） |
 | ホスティング | EC2 + Docker + CloudFront。IaC は **Terraform**。ローカルは Docker の PostgreSQL |
+| 監視 | CloudWatch Logs（コンテナログを14日保持）。Dockerローカルログも容量制限付きで保持 |
 
 ## アーキテクチャ
 
@@ -62,6 +63,8 @@ flowchart LR
     Browser -->|"署名付きPOST / GET<br/>画像本体を直接転送"| S3
     SSM["SSM Parameter Store"] -->|"起動時に環境変数を注入"| Runtime
     ECR["ECR<br/>immutable tags"] -->|"commit SHA tagをpull"| Runtime
+    Runtime -->|"container log"| CWAgent["CloudWatch Agent<br/>EC2 host"]
+    CWAgent -->|"stdout / stderr"| CWL["CloudWatch Logs<br/>14日保持"]
 ```
 
 アプリ内部は、技術詳細をapplication/domainから遠ざける方向で分割しています。画面・Server Action・Route Handlerがユースケースを呼び、DBやS3の実装はapplication層で定義したportを実装します。

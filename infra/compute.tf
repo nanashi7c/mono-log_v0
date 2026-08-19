@@ -143,18 +143,67 @@ resource "aws_instance" "app" {
   vpc_security_group_ids = [aws_security_group.ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
   depends_on = [
+    aws_iam_role_policy.cloudwatch_logs,
     aws_ssm_parameter.cloudfront_origin_verify_secret,
     aws_ssm_parameter.deployed_image_tag,
   ]
 
-  # 起動時に Docker を導入し、ECR からアプリを pull して起動する（SSH 不要・SSM 接続）。
+  # User data runs only at launch, so replace this stateless instance when it changes.
+  user_data_replace_on_change = true
+
+  # 起動時に Docker と CloudWatch Agent を導入し、ECR からアプリを pull して起動する（SSH 不要・SSM 接続）。
   # 機密(DB/Cognito/S3)と配備タグは実行時に SSM から取得。初回は配備タグが未設定のため
   # 30 秒ごとに再試行し、deploy.ps1 がタグを設定してserviceを再起動する。
   user_data = <<-EOF
 #!/bin/bash
 set -euo pipefail
 dnf install -y docker
+
+# Keep docker logs available locally for immediate SSM troubleshooting without unbounded disk growth.
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'DOCKERCONFIG'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+DOCKERCONFIG
 systemctl enable --now docker
+
+# Forward the current container JSON log without making application startup depend on monitoring.
+if dnf install -y amazon-cloudwatch-agent; then
+  cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'CWAGENT'
+{
+  "agent": {
+    "region": "${var.aws_region}"
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/lib/docker/containers/*/*-json.log",
+            "log_group_name": "${aws_cloudwatch_log_group.application.name}",
+            "log_stream_name": "{instance_id}/application"
+          }
+        ]
+      }
+    }
+  }
+}
+CWAGENT
+  if /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+    -a fetch-config -m ec2 -s \
+    -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json; then
+    systemctl enable amazon-cloudwatch-agent || echo "Failed to enable CloudWatch Agent at boot" >&2
+  else
+    echo "Failed to start CloudWatch Agent; application startup will continue" >&2
+  fi
+else
+  echo "Failed to install CloudWatch Agent; application startup will continue" >&2
+fi
 
 # Terraform が埋め込む非機密の設定
 cat > /etc/mono-log.env <<ENV

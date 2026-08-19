@@ -444,7 +444,8 @@ terraform apply    # yes で作成。RDS作成に数分かかる
 - **storage.tf**: 画像用S3（全公開ブロック+SSE）+ SSM（s3/bucket）
 - **database.tf**: RDS（`db.t4g.micro`, PG16, private, 20GB）+ マスタ/アプリ両ロールのパスワードをSSMに（`db/password`, `db/app_password`）+ 接続情報SSM（host/port/name/username）
 - **ecr.tf**: 上書き不可のイメージ保管庫 + 現在/直前の配備タグを持つSSM + 直近10個保持のライフサイクル
-- **compute.tf**: EC2用IAMロール（SSM読取・ECR読取・S3 RW）+ EC2（ARM, Docker自動導入, 起動時にSSMから設定・固定イメージタグ・オリジン検証秘密値を取得して`docker run`）+ ルート30GB
+- **compute.tf**: EC2用IAMロール（SSM読取・ECR読取・S3 RW）+ EC2（ARM, Docker/CloudWatch Agent自動導入, 起動時にSSMから設定・固定イメージタグ・オリジン検証秘密値を取得して`docker run`）+ ルート30GB
+- **monitoring.tf**: コンテナログ用CloudWatch Logs（14日保持）+ EC2から対象ロググループだけへ書き込む最小権限
 - **cdn.tf**: CloudFront（HTTPS強制・キャッシュ無効・全ヘッダ転送、オリジン=EC2、オリジン検証用の秘密ヘッダー）
 
 > 初回構築では配備タグが`not-deployed`のため、アプリは未起動（systemdが30秒ごとに再試行）です。次の11〜12章で固定タグのイメージを投入します。再作成時はSSMに残ったタグのイメージがECRにあれば自動起動します。
@@ -519,7 +520,13 @@ Invoke-RestMethod https://xxxxx.cloudfront.net/api/health
 2. サインアップ→確認コード（メール）→ログイン
 3. アイテムを作成し、保存・画像表示まで確認
 
-問題が出たら、EC2コンテナのログを見ます（本番はエラー詳細が隠れるため）。
+問題が出たら、まずCloudWatch Logsでコンテナログを確認します。通常の課金停止手順でEC2を削除した後も、ロググループを残すためログは14日間保持されます。
+
+```bash
+aws logs tail /mono-log/application --region ap-northeast-1 --since 30m --follow
+```
+
+CloudWatchへの転送自体が疑わしい場合は、SSM経由でEC2上のローカルログを確認します。
 
 ```bash
 INSTANCE=i-xxxxxxxx   # 自分のインスタンスID
@@ -531,6 +538,8 @@ aws ssm get-command-invocation --region ap-northeast-1 --command-id $CID --insta
   --query StandardOutputContent --output text
 ```
 > `tr -cd ...`で非ASCII（Next.jsログの「✓」等）を除去しています。これを入れないとWindowsのAWS CLIがcp932エンコードエラーで落ちることがあります。
+
+Dockerのローカルログは1ファイル10MB、最大3ファイルです。CloudWatch Agentの状態は`systemctl status amazon-cloudwatch-agent`で確認できます。
 
 ---
 
