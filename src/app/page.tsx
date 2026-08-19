@@ -114,7 +114,7 @@ function UnauthenticatedLanding() {
         <article className={styles.feature}>
           <h2 className={styles.featureTitle}>出品リスト</h2>
           <p className={styles.featureDesc}>
-            販売手数料・送料・作業時間を含めた損益を自動計算し、出品すべきかを判定します。
+            販売手数料・送料・作業時間・購入価格を含めた損益を自動計算し、出品すべきかを判定します。
           </p>
         </article>
       </section>

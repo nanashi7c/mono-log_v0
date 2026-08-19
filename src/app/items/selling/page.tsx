@@ -51,7 +51,7 @@ export default async function SellingItemsPage() {
                     <Stat label="販売手数料" value={formatYen(r.listing?.selling_fee)} />
                     <Stat label="梱包材費" value={formatYen(r.listing?.packaging_cost)} />
                     <Stat label="作業時間コスト" value={formatYen(r.listing?.work_time_cost)} />
-                    <Stat label="営業利益" value={formatYen(r.listing?.operating_benefit)} />
+                    <Stat label="売却手取り" value={formatYen(r.listing?.operating_benefit)} />
                     <Stat
                       label="経常利益"
                       value={formatYen(ord)}

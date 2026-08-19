@@ -135,7 +135,7 @@ describe("prismaItemApiCommandRepository", () => {
     expect(Object.isFrozen(createdItem.category_ids)).toBe(true);
   });
 
-  it("updates only API fields and categories while preserving image, plan, and listing", async () => {
+  it("updates API fields and categories while preserving raw listing data and refreshing its profit", async () => {
     const userId = await createTestUser("api-update-owner");
     const otherUserId = await createTestUser("api-update-other");
     const oldCategory = await admin.category.create({
@@ -151,13 +151,21 @@ describe("prismaItemApiCommandRepository", () => {
         name: "before update",
         imageUrl: "keep-image.png",
         quantity: 1,
+        actualPrice: 100,
       },
     });
     await admin.plan.create({
       data: { itemId: item.id, plannedPurchaseYear: 2027 },
     });
     await admin.listing.create({
-      data: { itemId: item.id, sellingPrice: 15_000 },
+      data: {
+        itemId: item.id,
+        sellingPrice: 15_000,
+        operatingBenefit: 1_000,
+        workTimeCost: 100,
+        ordinaryProfit: 800,
+        isListing: true,
+      },
     });
     await admin.itemCategory.create({
       data: { itemId: item.id, categoryId: oldCategory.id },
@@ -166,6 +174,7 @@ describe("prismaItemApiCommandRepository", () => {
     const updateInput = apiInput("after update", {
       status: "sold",
       quantity: 2,
+      actualPrice: 300,
       categoryIds: Object.freeze([newCategory.id]),
     });
     const result = await repository.update(
@@ -196,6 +205,7 @@ describe("prismaItemApiCommandRepository", () => {
       status: "sold",
       name: "after update",
       quantity: 2,
+      actual_price: 300,
       image_url: "keep-image.png",
       category_ids: [newCategory.id],
     });
@@ -212,6 +222,10 @@ describe("prismaItemApiCommandRepository", () => {
       itemCategories: [{ categoryId: newCategory.id }],
     });
     expect(persisted?.listing?.sellingPrice?.toNumber()).toBe(15_000);
+    expect(persisted?.listing?.operatingBenefit?.toNumber()).toBe(1_000);
+    expect(persisted?.listing?.workTimeCost?.toNumber()).toBe(100);
+    expect(persisted?.listing?.ordinaryProfit?.toNumber()).toBe(600);
+    expect(persisted?.listing?.isListing).toBe(true);
   });
 
   it("accepts categories owned by the user and preset categories", async () => {

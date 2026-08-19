@@ -163,7 +163,7 @@ export default async function ItemDetailPage({
             <dd className={styles.dd}>{formatYen(listing.selling_fee)}</dd>
             <dt className={styles.dt}>作業時間コスト</dt>
             <dd className={styles.dd}>{formatYen(listing.work_time_cost)}</dd>
-            <dt className={styles.dt}>営業利益</dt>
+            <dt className={styles.dt}>売却手取り</dt>
             <dd className={styles.dd}>{formatYen(listing.operating_benefit)}</dd>
             <dt className={styles.dt}>経常利益</dt>
             <dd

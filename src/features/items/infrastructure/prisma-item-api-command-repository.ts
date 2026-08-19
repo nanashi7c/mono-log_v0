@@ -2,6 +2,7 @@ import { withUser, type Tx } from "@/db/client";
 import { toItem } from "@/db/serialize";
 import type { ItemApiCommandRepository } from "@/features/items/application/item-api-command-ports";
 import { toItemApiData } from "@/features/items/infrastructure/item-api-data-mapper";
+import { refreshListingProfitForActualPrice } from "@/features/items/infrastructure/item-persistence";
 
 export type ItemApiCommandTransactionRunner = <T>(
   userId: string,
@@ -115,6 +116,11 @@ export function createPrismaItemApiCommandRepository(
               : null,
           },
         });
+        await refreshListingProfitForActualPrice(
+          tx,
+          BigInt(itemId),
+          input.actualPrice,
+        );
         await replaceItemCategories(tx, BigInt(itemId), input.categoryIds);
 
         return Object.freeze({

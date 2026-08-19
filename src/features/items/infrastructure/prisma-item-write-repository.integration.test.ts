@@ -126,6 +126,45 @@ afterAll(async () => {
 });
 
 describe("prismaItemWriteRepository", () => {
+  it("所有状態で購入価格を変更したときListing下書きの経常利益を再計算する", async () => {
+    const userId = await createTestUser("refresh-draft-profit");
+    const item = await admin.item.create({
+      data: {
+        userId,
+        status: "owned",
+        name: "draft item",
+        quantity: 1,
+        actualPrice: 100,
+        listing: {
+          create: {
+            sellingPrice: 1_500,
+            operatingBenefit: 1_000,
+            workTimeCost: 100,
+            ordinaryProfit: 800,
+            isListing: true,
+          },
+        },
+      },
+    });
+
+    const result = await repository.update(
+      userId,
+      Number(item.id),
+      { ...ownedInput("updated draft item"), actualPrice: 300 },
+      { type: "keep" },
+    );
+    const listing = await admin.listing.findUnique({
+      where: { itemId: item.id },
+    });
+
+    expect(result).toMatchObject({ type: "updated" });
+    expect(listing?.sellingPrice?.toNumber()).toBe(1_500);
+    expect(listing?.operatingBenefit?.toNumber()).toBe(1_000);
+    expect(listing?.workTimeCost?.toNumber()).toBe(100);
+    expect(listing?.ordinaryProfit?.toNumber()).toBe(600);
+    expect(listing?.isListing).toBe(true);
+  });
+
   it("作成・更新を通して関連データと画像キーを同期する", async () => {
     const userId = await createTestUser("write-flow");
     const plannedInput: ItemWriteInput = {

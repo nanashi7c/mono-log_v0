@@ -193,8 +193,8 @@ create type public.item_status as enum ('planned', 'owned', 'listed', 'sold');
 | `labor_rate` | `numeric(10,0)` | — | — | 時給。CHECK `>= 0` |
 | `selling_fee` | `numeric(10,0)` | — | — | ★アプリ計算値: `selling_price × platforms.fee_rate` |
 | `work_time_cost` | `numeric(10,0)` | — | — | ★アプリ計算値: `work_time_hours × labor_rate` |
-| `operating_benefit` | `numeric(10,0)` | — | — | ★アプリ計算値: 営業利益 |
-| `ordinary_profit` | `numeric(10,0)` | — | — | ★アプリ計算値: 経常利益 |
+| `operating_benefit` | `numeric(10,0)` | — | — | ★アプリ計算値: 売却手取り（DB列名は互換性のため維持） |
+| `ordinary_profit` | `numeric(10,0)` | — | — | ★アプリ計算値: 売却手取り − 作業時間コスト − 実購入価格 |
 | `is_listing` | `boolean` | — | — | 実際に出品中か |
 | `created_at` | `timestamptz` | ✓ | `now()` |  |
 | `updated_at` | `timestamptz` | ✓ | `now()` | トリガで自動更新 |
