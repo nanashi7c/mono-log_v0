@@ -18,7 +18,7 @@ terraform init      # 初回や別マシンのみ
 terraform plan      # 作成内容を確認
 terraform apply     # yes で作成（RDS は数分かかる）
 ```
-- 保存済みデータを使う場合は、`plan`と`apply`の両方に同じ`-var="db_snapshot_identifier=<スナップショット名>"`を付ける
+- `mono-log-db-20260629`から復元する場合は、`plan`と`apply`の両方に`-var="db_snapshot_identifier=mono-log-db-20260629"`を付ける。別時点のスナップショットは含まれるマイグレーションを確認し、`$SnapshotBaselineMigrations`を先に更新する
 - 新しい RDS エンドポイント・EC2・CloudFront が作られ、SSM パラメータと CloudFront オリジンは自動で更新される
 - 初回構築では配備タグが`not-deployed`のためアプリは未起動（systemdが30秒ごとに再試行）。再作成時はSSMに残る固定タグのイメージがECRにあれば自動起動
 
@@ -36,12 +36,14 @@ powershell -File migrate.ps1
 powershell -File migrate.ps1 -RestoredSnapshot
 ```
 
-- 実行前に対象だけ確認する場合は末尾に`-ListMigrations`を付ける。このオプションはAWSへ接続せず、DBも変更しない
+- 実行前に候補だけ確認する場合は末尾に`-ListMigrations`を付ける。このオプションはAWSへ接続しないため、DB上で適用済みかどうかの判定は実行時に行う
 - 空DBでは全マイグレーション、復元DBではスナップショットに含まれる初期2件を除くマイグレーションを日時順に適用する
+- 適用済みの名前を`app.schema_migrations`へ記録し、再実行や将来のSQL追加時は未適用分だけを実行する
 - 全SQLを1トランザクションで適用するため、途中で失敗した場合は今回の変更全体がロールバックされる
-- 空DBと復元DBの指定を取り違えた場合は、`public.users`の有無を検査してSQL適用前に停止する
+- 復元指定の誤りや、適用履歴のない既存DBへの通常実行はSQL適用前に停止する
 - 併せて `monolog_app` ロールのパスワードを SSM (`/mono-log/db/app_password`) の値に設定
 - `migrations completed successfully`が表示されれば成功
+- SSM待機が10分を超えた場合はキャンセルを要求して停止する。表示されたコマンドIDが`Cancelled`、`Failed`、`Success`などの終了状態になったことを確認するまで再実行しない
 
 ### 3. アプリをビルドして配備
 ```powershell

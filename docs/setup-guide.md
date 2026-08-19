@@ -466,13 +466,14 @@ powershell -ExecutionPolicy Bypass -File migrate.ps1
 # 初期マイグレーション適用済みスナップショットから復元した場合
 powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot
 
-# AWSやDBを変更せず、選択されるマイグレーションだけ確認する場合
+# AWSやDBを変更せず、候補になるマイグレーションだけ確認する場合
 powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot -ListMigrations
 ```
 
 やっていること:
 - `prisma/migrations`を日時順に自動検出し、空DBには全件、復元DBにはスナップショットに含まれない追加分だけを適用
-- 空DBと復元DBの指定ミスを`public.users`の有無で検出し、SQL適用前に停止
+- 適用済みの名前を`app.schema_migrations`へ記録し、再実行時や将来の追加時は未適用分だけを実行
+- 復元指定の誤りや、適用履歴のない既存DBへの通常実行をSQL適用前に停止
 - 選択したSQLを1トランザクションで適用し、途中失敗時は今回の変更全体をロールバック
 - 仕上げに`ALTER ROLE monolog_app WITH PASSWORD '<SSMの app_password>'`で、アプリ用ロールのパスワードを**SSMの強いパスワード**に差し替え（ローカルの`localapppw`から変更）
 - 出力に`migrations completed successfully`が出れば成功
@@ -588,7 +589,7 @@ terraform apply        # 空のRDS/EC2/CloudFrontを再作成（DNS/CloudFront�
 # → 12章 deploy（ビルド→push→起動）
 ```
 
-保存したデータから再開する場合は、`terraform plan`と`terraform apply`の両方に`-var="db_snapshot_identifier=<最終スナップショット名>"`を付けます。その後、11章の`migrate.ps1 -RestoredSnapshot`でスナップショット作成後の追加マイグレーションだけを適用します。
+現在保存している`mono-log-db-20260629`から再開する場合は、`terraform plan`と`terraform apply`の両方に`-var="db_snapshot_identifier=mono-log-db-20260629"`を付けます。その後、11章の`migrate.ps1 -RestoredSnapshot`でスナップショット作成後の追加マイグレーションだけを適用します。別時点のスナップショットを使う場合は、含まれるマイグレーションを確認し、`infra/migrate.ps1`の`$SnapshotBaselineMigrations`を先に更新してください。
 
 ### コード更新だけのとき
 インフラを消していなければ、**12章のデプロイだけ**再実行すれば反映されます。

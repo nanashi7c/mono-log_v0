@@ -848,22 +848,22 @@ powershell -ExecutionPolicy Bypass -File migrate.ps1
 # 初期マイグレーション適用済みスナップショットから復元: 追加分だけ適用
 powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot
 
-# AWSやDBを変更せず、選択対象だけ確認
+# AWSやDBを変更せず、候補だけ確認
 powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot -ListMigrations
 ```
 
 **処理の要点**
 
 - `Get-ChildItem ... | Sort-Object Name`: `prisma/migrations`をディレクトリ名の日時順で列挙する。マイグレーション追加時にスクリプトへファイル名を追記する必要はない。
-- `$SnapshotBaselineMigrations`: 保存済みスナップショットに含まれる初期マイグレーションを明示し、復元モードでは除外する。
-- `public.users`の存在確認: 空DBと復元DBのモード指定を取り違えた場合、変更前に停止する。
+- `$SnapshotBaselineMigrations`: 保存済みスナップショットに含まれる初期マイグレーションを明示し、復元初回に適用済みとして記録する。
+- `app.schema_migrations`: 適用済みのディレクトリ名を記録し、再実行や将来のSQL追加では未適用分だけを選ぶ。履歴のない既存DBを通常モードで変更しない。
 - 実行ごとの一意なS3プレフィックス: 並行実行や前回の一時ファイルとの混在を防ぎ、処理後はローカル・S3・EC2の一時ファイルを削除する。
-- `psql --single-transaction -v ON_ERROR_STOP=1`: 選択した全SQLと`monolog_app`のパスワード更新を1トランザクションにまとめる。1つでも失敗した場合、今回のDB変更は全体がロールバックされる。
-- SSMコマンドの状態を最大10分ポーリングし、`Success`以外を失敗として扱う。`migrations completed successfully`が表示されれば完了。
+- `psql --single-transaction -v ON_ERROR_STOP=1`: 選択した全SQL、適用履歴、`monolog_app`のパスワード更新を1トランザクションにまとめる。1つでも失敗した場合、今回のDB変更は全体がロールバックされる。
+- SSMコマンドの状態を最大10分ポーリングし、`Success`以外を失敗として扱う。タイムアウト時はキャンセルを要求し、表示されたコマンドIDが終了状態になるまで再実行しない。`migrations completed successfully`が表示されれば完了。
 
 > `-RestoredSnapshot`は、現在保存している初期2件適用済みスナップショット向けである。将来、より新しいマイグレーションを含むスナップショットを基準にする場合は、`$SnapshotBaselineMigrations`とこの説明を同じPRで更新する。
 
 ---
 
 ## これで揃うもの
-付録D(データ基盤)＋付録B(中核)＋付録C(API)＋付録A(インフラ)で、**画面UI以外はすべて手順書内に完全コード＋逐行解説**が揃います。残るUI(`app/*/page.tsx`・`components/*`・css)はリポジトリ参照。
+付録D(データ基盤)＋付録B(中核)＋付録C(API)＋付録A(インフラ)で、画面UI以外の構成と実装方針を追えます。運用スクリプトと残るUI(`app/*/page.tsx`・`components/*`・css)は、二重管理を避けるためリポジトリ内の実装を正本として参照します。

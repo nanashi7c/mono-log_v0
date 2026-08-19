@@ -48,18 +48,14 @@ if ($RestoredSnapshot) {
     }
   }
   $SelectedMigrations = @($MigrationDirectories | Where-Object { $_.Name -notin $SnapshotBaselineMigrations })
-  $Mode = "restored"
+  $Mode = "restored-snapshot"
 } else {
   $SelectedMigrations = $MigrationDirectories
-  $Mode = "fresh"
-}
-
-if ($SelectedMigrations.Count -eq 0) {
-  throw "No migrations selected for mode: $Mode"
+  $Mode = "automatic"
 }
 
 Write-Host "Migration mode: $Mode"
-Write-Host "Selected migrations:"
+Write-Host "Candidate migrations:"
 foreach ($Migration in $SelectedMigrations) {
   Write-Host "  $($Migration.Name)"
 }
@@ -71,12 +67,16 @@ if ($ListMigrations) {
 $RunId = [Guid]::NewGuid().ToString("N")
 $Prefix = "_deploy/migrations/$RunId"
 $ManifestFile = Join-Path $env:TEMP "mono-log-migrations-$RunId.txt"
+$BaselineManifestFile = Join-Path $env:TEMP "mono-log-migration-baseline-$RunId.txt"
 $ParametersFile = Join-Path $env:TEMP "mono-log-migrate-$RunId.json"
 $Bucket = $null
 
 try {
   $ManifestEntries = @($SelectedMigrations | ForEach-Object { "$($_.Name).sql" })
-  Set-Content -Path $ManifestFile -Value $ManifestEntries -Encoding ascii
+  $ManifestContent = if ($ManifestEntries.Count -eq 0) { "" } else { ($ManifestEntries -join "`n") + "`n" }
+  $BaselineContent = ($SnapshotBaselineMigrations -join "`n") + "`n"
+  [IO.File]::WriteAllText($ManifestFile, $ManifestContent, [Text.Encoding]::ASCII)
+  [IO.File]::WriteAllText($BaselineManifestFile, $BaselineContent, [Text.Encoding]::ASCII)
 
   $Bucket = (& $aws ssm get-parameter --region $Region --name "/$Project/s3/bucket" `
       --query "Parameter.Value" --output text)
@@ -89,6 +89,8 @@ try {
   Write-Host "== upload migration SQL to an isolated S3 prefix =="
   & $aws s3 cp $ManifestFile "s3://$Bucket/$Prefix/manifest.txt" --region $Region | Out-Null
   Assert-NativeCommand "upload migration manifest"
+  & $aws s3 cp $BaselineManifestFile "s3://$Bucket/$Prefix/baseline.txt" --region $Region | Out-Null
+  Assert-NativeCommand "upload snapshot baseline manifest"
 
   foreach ($Migration in $SelectedMigrations) {
     $MigrationFile = Join-Path $Migration.FullName "migration.sql"
@@ -133,24 +135,27 @@ APW=$(aws ssm get-parameter --region "$REGION" --name "/$PROJECT/db/app_password
 BASE_SCHEMA_EXISTS=$(docker run --rm -e PGPASSWORD="$MPW" postgres:16 \
   psql -h "$HOST" -U monolog_admin -d monolog -Atqc \
   "select (to_regclass('public.users') is not null)::text;")
+MIGRATION_HISTORY_EXISTS=$(docker run --rm -e PGPASSWORD="$MPW" postgres:16 \
+  psql -h "$HOST" -U monolog_admin -d monolog -Atqc \
+  "select (to_regclass('app.schema_migrations') is not null)::text;")
 
-if [ "$MODE" = "fresh" ] && [ "$BASE_SCHEMA_EXISTS" != "false" ]; then
-  echo "Fresh mode requires an empty database, but public.users already exists." >&2
+if [ "$MODE" = "restored-snapshot" ] && [ "$BASE_SCHEMA_EXISTS" != "true" ]; then
+  echo "Restored snapshot mode requires the baseline schema, but public.users is missing." >&2
   exit 1
 fi
-if [ "$MODE" = "restored" ] && [ "$BASE_SCHEMA_EXISTS" != "true" ]; then
-  echo "Restored snapshot mode requires the baseline schema, but public.users is missing." >&2
+if [ "$MODE" = "automatic" ] && [ "$BASE_SCHEMA_EXISTS" = "true" ] && [ "$MIGRATION_HISTORY_EXISTS" != "true" ]; then
+  echo "Existing schema has no migration history. Use -RestoredSnapshot only for the documented snapshot baseline." >&2
   exit 1
 fi
 
 mapfile -t MIGRATIONS < "$WORKDIR/manifest.txt"
-if [ "${#MIGRATIONS[@]}" -eq 0 ]; then
-  echo "Migration manifest is empty." >&2
-  exit 1
-fi
+mapfile -t BASELINE_MIGRATIONS < "$WORKDIR/baseline.txt"
 
 MIGRATION_ARGS=()
+APPLIED_MIGRATIONS=()
 for migration in "${MIGRATIONS[@]}"; do
+  migration=${migration%$'\r'}
+  [ -z "$migration" ] && continue
   if [[ ! "$migration" =~ ^[0-9A-Za-z_-]+\.sql$ ]]; then
     echo "Invalid migration file name: $migration" >&2
     exit 1
@@ -159,18 +164,57 @@ for migration in "${MIGRATIONS[@]}"; do
     echo "Migration file not found: $migration" >&2
     exit 1
   fi
-  MIGRATION_ARGS+=( -f "/m/$migration" )
+  migration_name=${migration%.sql}
+  already_applied=false
+  if [ "$MIGRATION_HISTORY_EXISTS" = "true" ]; then
+    already_applied=$(docker run --rm -e PGPASSWORD="$MPW" postgres:16 \
+      psql -h "$HOST" -U monolog_admin -d monolog -Atqc \
+      "select exists(select 1 from app.schema_migrations where name = '$migration_name')::text;")
+  fi
+  if [ "$already_applied" != "true" ]; then
+    MIGRATION_ARGS+=( -f "/m/$migration" )
+    APPLIED_MIGRATIONS+=( "$migration_name" )
+  fi
 done
 
-cat > "$WORKDIR/set-app-password.sql" <<'SQL'
+cat > "$WORKDIR/begin-migrations.sql" <<'SQL'
+select pg_advisory_xact_lock(hashtext('mono-log-schema-migrations'));
+SQL
+
+cat > "$WORKDIR/finalize-migrations.sql" <<'SQL'
+create table if not exists app.schema_migrations (
+  name text primary key,
+  applied_at timestamptz not null default now()
+);
+SQL
+
+if [ "$MODE" = "restored-snapshot" ] && [ "$MIGRATION_HISTORY_EXISTS" != "true" ]; then
+  for baseline_migration in "${BASELINE_MIGRATIONS[@]}"; do
+    baseline_migration=${baseline_migration%$'\r'}
+    if [[ ! "$baseline_migration" =~ ^[0-9A-Za-z_-]+$ ]]; then
+      echo "Invalid baseline migration name: $baseline_migration" >&2
+      exit 1
+    fi
+    printf "insert into app.schema_migrations (name) values ('%s') on conflict (name) do nothing;\n" \
+      "$baseline_migration" >> "$WORKDIR/finalize-migrations.sql"
+  done
+fi
+
+for applied_migration in "${APPLIED_MIGRATIONS[@]}"; do
+  printf "insert into app.schema_migrations (name) values ('%s') on conflict (name) do nothing;\n" \
+    "$applied_migration" >> "$WORKDIR/finalize-migrations.sql"
+done
+
+cat >> "$WORKDIR/finalize-migrations.sql" <<'SQL'
 ALTER ROLE monolog_app WITH PASSWORD :'app_password';
 SQL
 
 docker run --rm -e PGPASSWORD="$MPW" -v "$WORKDIR:/m:ro" postgres:16 \
   psql -h "$HOST" -U monolog_admin -d monolog \
   -v ON_ERROR_STOP=1 -v app_password="$APW" --single-transaction \
+  -f /m/begin-migrations.sql \
   "${MIGRATION_ARGS[@]}" \
-  -f /m/set-app-password.sql
+  -f /m/finalize-migrations.sql
 '@
   $Bash = $Bash.Replace("__REGION__", $Region).
       Replace("__PROJECT__", $Project).
@@ -212,7 +256,11 @@ docker run --rm -e PGPASSWORD="$MPW" -v "$WORKDIR:/m:ro" postgres:16 \
   }
 
   if (-not $Invocation -or $Invocation.Status -in $RunningStatuses) {
-    throw "RDS migration timed out while waiting for the SSM command."
+    & $aws ssm cancel-command --region $Region --command-id $CommandId 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "Could not request cancellation for timed-out SSM command $CommandId."
+    }
+    throw "RDS migration timed out. Cancellation was requested; confirm SSM command $CommandId is terminal before retrying."
   }
   if ($Invocation.StandardOutputContent) {
     Write-Host $Invocation.StandardOutputContent.TrimEnd()
@@ -228,7 +276,11 @@ docker run --rm -e PGPASSWORD="$MPW" -v "$WORKDIR:/m:ro" postgres:16 \
 } finally {
   if ($Bucket) {
     & $aws s3 rm "s3://$Bucket/$Prefix/" --recursive --region $Region 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "Could not remove temporary S3 objects under s3://$Bucket/$Prefix/."
+    }
   }
   Remove-Item $ManifestFile -ErrorAction SilentlyContinue
+  Remove-Item $BaselineManifestFile -ErrorAction SilentlyContinue
   Remove-Item $ParametersFile -ErrorAction SilentlyContinue
 }
