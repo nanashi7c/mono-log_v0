@@ -2,6 +2,12 @@
 
 所有物・購入予定・出品をまとめて管理するアプリ。Next.js (App Router) + React + TypeScript / Server Actions + REST API。バックエンドは **AWS ネイティブ**（Cognito 認証 / RDS PostgreSQL + Prisma + RLS / S3）。
 
+## 本番環境
+
+- [https://d1qfqb4t9uqn8f.cloudfront.net](https://d1qfqb4t9uqn8f.cloudfront.net)
+
+本番環境はCloudFront経由で公開しています。コスト削減のためAWSリソースを停止している期間はアクセスできません。
+
 ## 動作画面
 
 ### ランディング画面
@@ -24,9 +30,9 @@
 | --- | --- |
 | フロント/サーバ | Next.js 15 (App Router) / React 19 / TypeScript / Server Actions / CSS Modules |
 | 認証 | Amazon Cognito（JWT 発行・`aws-jwt-verify` で検証・httpOnly Cookie・middleware で自動更新） |
-| DB | RDS PostgreSQL。**Prisma Client**（クエリ）/ **Prisma Migrate**（DDL・RLS・seed の手書きSQL） |
+| DB | RDS PostgreSQL。クエリは **Prisma Client**、DDL・RLS・seedは手書きSQL。ローカルはPrisma Migrate、本番は`migrate.ps1`で適用 |
 | 認可 | 非所有者ロール `monolog_app` で接続し、トランザクション内 `set_config('app.current_user_id', …)` で **行レベルセキュリティ(RLS)** |
-| 画像 | S3（非公開）＋ 署名付き GET / POST。画像本体はブラウザからS3へ直接送信 |
+| 画像 | S3（非公開）＋署名付きGET / POST。アップロード本体はブラウザからS3へ直接送信 |
 | API | 外部向け REST `/api/v1`（Cognito の Bearer トークン認証） |
 | ホスティング | EC2 + Docker + CloudFront。IaC は **Terraform**。ローカルは Docker の PostgreSQL |
 | 監視 | CloudWatch Logs（コンテナログを14日保持）。Dockerローカルログも容量制限付きで保持 |
@@ -35,46 +41,56 @@
 
 実行時は、画面操作と外部APIをCloudFront経由でNext.jsへ集約します。CloudFrontはオリジン向けの秘密ヘッダーを付け、Next.jsのmiddlewareが一致を確認してから処理を続けます。認証はCognito、永続化と認可はRDS PostgreSQL、画像本体は非公開S3が担当します。
 
-画像の選択時だけ通信経路が異なります。Next.jsは認証・入力検証・署名付きPOSTの発行を行い、画像本体はアプリサーバーを経由せずブラウザからS3へ直接送信します。これにより、EC2の通信量とメモリ使用量を抑えます。
+画像の選択時だけ通信経路が異なります。Next.jsは認証・入力検証・署名付きPOSTの発行を行い、アップロード本体はアプリサーバーを経由せずブラウザからS3へ直接送信します。表示時はNext.js Image Optimizerが署名付きGETでS3から画像を取得します。
 
 ```mermaid
 flowchart LR
     Browser["ブラウザ<br/>画面・httpOnly Cookie"]
     ApiClient["外部クライアント<br/>REST・Bearer JWT"]
     CF["CloudFront<br/>HTTPS終端"]
+    Cognito["Amazon Cognito"]
 
-    subgraph Runtime["EC2 / Docker / Next.js standalone"]
-        MW["middleware<br/>トークン更新"]
-        Delivery["App Router<br/>Server Components / Actions / Route Handlers"]
-        UseCase["Application<br/>Use Cases / Ports"]
-        Domain["Domain<br/>状態遷移・純粋関数"]
-        Infra["Infrastructure<br/>Prisma / AWS adapters"]
-        MW --> Delivery --> UseCase
-        UseCase --> Domain
-        UseCase --> Infra
+    subgraph EC2["EC2 / public subnet"]
+        subgraph Runtime["Docker / Next.js standalone"]
+            MW["middleware<br/>オリジン検証・トークン更新"]
+            Delivery["App Router<br/>Server Components / Actions / Route Handlers"]
+            ImageOptimizer["Next.js Image Optimizer"]
+            UseCase["Application<br/>Use Cases / Ports"]
+            Domain["Domain<br/>状態遷移・純粋関数"]
+            Infra["Infrastructure<br/>Prisma / AWS adapters"]
+            MW --> Delivery
+            MW --> ImageOptimizer
+            Delivery --> UseCase
+            UseCase --> Domain
+            UseCase -->|"port経由で実行"| Infra
+        end
+        CWAgent["CloudWatch Agent<br/>EC2 host"]
+        Runtime -->|"container log"| CWAgent
     end
 
     Browser -->|"HTTPS"| CF
     ApiClient -->|"HTTPS / api/v1"| CF
+    ApiClient <-->|"サインイン / JWT取得"| Cognito
     CF -->|"HTTP :80<br/>オリジン検証ヘッダー"| MW
-    Delivery <-->|"認証・JWT"| Cognito["Amazon Cognito"]
+    Delivery <-->|"認証・JWT"| Cognito
     Infra -->|"Prisma transaction<br/>set_config + RLS"| RDS[("RDS PostgreSQL<br/>private subnet")]
-    Infra -->|"署名発行・検査・削除"| S3["S3 item-images<br/>非公開"]
-    Browser -->|"署名付きPOST / GET<br/>画像本体を直接転送"| S3
+    Infra -->|"署名生成・検査・削除"| S3["S3 item-images<br/>非公開"]
+    Browser -->|"署名付きPOST<br/>アップロードを直接送信"| S3
+    ImageOptimizer -->|"署名付きGET<br/>表示画像を取得"| S3
     SSM["SSM Parameter Store"] -->|"起動時に環境変数を注入"| Runtime
     ECR["ECR<br/>immutable tags"] -->|"commit SHA tagをpull"| Runtime
-    Runtime -->|"container log"| CWAgent["CloudWatch Agent<br/>EC2 host"]
     CWAgent -->|"stdout / stderr"| CWL["CloudWatch Logs<br/>14日保持"]
 ```
 
-アプリ内部は、技術詳細をapplication/domainから遠ざける方向で分割しています。画面・Server Action・Route Handlerがユースケースを呼び、DBやS3の実装はapplication層で定義したportを実装します。
+アプリ内部は、主に`src/features`配下の処理について、技術詳細をapplication/domainから遠ざける構成です。Presentation層がユースケースと実装を組み立て、application層はportを介してDBやS3を利用します。
 
 ```mermaid
 flowchart LR
     Presentation["Presentation<br/>app / components / API routes"] --> Application["Application<br/>use cases / input / ports"]
+    Presentation --> Adapters
     Application --> Domain["Domain<br/>rules / calculations / transitions"]
-    Infrastructure["Infrastructure<br/>Prisma repositories / S3 stores"] -. "portsを実装" .-> Application
-    Presentation -. "依存を組み立てる" .-> Infrastructure
+    Infrastructure["Infrastructure / shared adapters<br/>Prisma repositories / db/client / lib/auth / S3 stores"] -. "portsを実装" .-> Application
+    Presentation -. "依存を組み立てる / 一部は直接利用" .-> Infrastructure
     Adapters["Adapters<br/>Form・API・CSVの変換"] --> Application
     Infrastructure --> External["RDS / Cognito / S3"]
 ```
@@ -84,14 +100,14 @@ flowchart LR
 - DB操作は`withUser`内のトランザクションに閉じ、RLSの利用者コンテキストを必ず設定する。
 - domainはI/Oを持たない純粋関数、applicationはユースケースとport、infrastructureはPrisma・AWS SDKの詳細を担当する。
 - Cookie・URL・DBを状態の正本とし、クライアント側はフォームやメニューなど短命なUI状態だけをReact hooksで持つ。
-- S3の署名はアプリが発行し、画像本体の転送はブラウザとS3の間で行う。ただしアイテム保存との確定状態はDBで管理する。
+- S3の署名はアプリが発行し、アップロード本体はブラウザからS3へ直接送信する。表示時はNext.js Image Optimizerが署名付きGETを使う。アイテム保存との確定状態はDBで管理する。
 - 本番イメージはGit commit SHAを上書き不可のECRタグとして保存し、現在・直前の配備タグをSSMで管理する。
 
 AWSリソース、ネットワーク、Docker、運用上の制約と改善優先度は[インフラ設計](docs/infra-design.md)を参照してください。
 
 ## データベース構成
 
-カラム名と型は、実際のPostgreSQL上の定義を表しています。詳細は [DBスキーマ設計](docs/db-design.md) を参照してください。
+カラム名と型は、アプリケーションが扱うPostgreSQL上の業務テーブルを表しています。運用用の`app.schema_migrations`は省略しています。詳細は [DBスキーマ設計](docs/db-design.md) を参照してください。
 
 ```mermaid
 erDiagram
@@ -101,6 +117,15 @@ erDiagram
         text username
         timestamptz created_at
         timestamptz updated_at
+    }
+
+    PENDING_ITEM_IMAGE_UPLOADS {
+        uuid id PK
+        uuid user_id FK
+        text object_key UK
+        text content_type
+        timestamptz expires_at
+        timestamptz created_at
     }
 
     CATEGORIES {
@@ -208,6 +233,7 @@ erDiagram
 
     USERS o|--o{ CATEGORIES : owns
     USERS ||--o{ ITEMS : owns
+    USERS ||--o{ PENDING_ITEM_IMAGE_UPLOADS : owns
     ITEMS ||--o{ ITEMS_CATEGORIES : categorized_by
     CATEGORIES ||--o{ ITEMS_CATEGORIES : contains
     ITEMS ||--o| PLANS : has
@@ -223,7 +249,7 @@ erDiagram
 ## 機能
 
 - **アイテム管理**: 名前・カテゴリ・JANコード・数量・購入価格・購入日・メモ・画像。状態は **購入予定 / 所有 / 出品中 / 売却**
-- **状態遷移**: 購入予定→所有（購入済み）、所有→出品、出品→売却（論理削除）/ 出品取り下げ、など
+- **状態遷移**: 購入予定→所有、所有→出品、出品→売却（論理削除）/ 出品取り下げ。取り下げ後も出品情報を下書きとして保持し、再出品時に再利用
 - **カテゴリ**: プリセット＋自分用に作成。一覧でキーワード検索（名前・メモ）／カテゴリ絞り込み（「未分類」も指定可）
 - **ダッシュボード**: 登録数 / 合計金額 / 平均 / カテゴリ別の数と金額バー
 - **購入予定リスト**: 購入予定年月・定価・購入予定価格・商品リンク・お買い得期間
@@ -256,7 +282,7 @@ npm run dev
 # http://localhost:3000
 ```
 
-> 注: 認証(Cognito)と画像(S3)は**実物の AWS リソース**を参照します。これらは Terraform で作成します（[docs/setup-guide.md](docs/setup-guide.md) の10章）。DB だけ確認するなら4までで進められます。
+> 注: 認証(Cognito)と画像(S3)は**実物の AWS リソース**を参照します。これらは Terraform で作成します（[docs/setup-guide.md](docs/setup-guide.md) の10章）。DBの作成とマイグレーションだけなら手順2までで確認できます。アプリを起動して認証・画像機能を利用するにはCognitoとS3の設定が必要です。
 
 ## ドキュメント
 
@@ -270,7 +296,7 @@ npm run dev
 ```
 prisma/
   schema.prisma           Prisma のテーブル定義（クエリ型。db pull 由来・@map で camelCase）
-  migrations/             DDL＋RLS＋ロール＋seed の手書きSQL（Prisma Migrate 管理）
+  migrations/             DDL＋RLS＋ロール＋seed（ローカルはPrisma Migrate、本番はmigrate.ps1）
 src/
   middleware.ts           全リクエスト前処理（オリジン検証・トークン自動更新）
   app/
@@ -278,12 +304,12 @@ src/
     login/ signup/ confirm/   認証画面
     auth/actions.ts       サインアップ/ログイン/ログアウト（Server Actions）
     items/                一覧/詳細/新規/編集/状態遷移
-    items/actions.ts      アイテム CRUD（RLS 下で create/update/delete）
+    items/actions.ts      アイテム作成・更新・削除を各ユースケースへ委譲
     dashboard/ mypage/    集計 / マイページ（退会・メール変更）
     import/               CSV 取り込み（画面操作用）
     api/export/route.ts   CSV ダウンロード（Cookie 認証）
     api/v1/               外部向け JSON REST API（Bearer 認証）items/categories/export
-  components/             UI（item-card / item-form / nav-bar / filter-bar）
+  components/             UI（item-card / item-form / nav-bar / owned-items-toolbar）
   features/home/          トップ画面のユーザー名・件数Query
   features/items/         itemsのdomain/application/infrastructure/adapters
   features/users/         マイページのプロフィールQuery
@@ -293,25 +319,28 @@ src/
   lib/
     auth/cognito.ts       Cognito SDK ラッパ + JWT 検証
     auth/session.ts       httpOnly Cookie でトークン保持
-    auth/api.ts           REST API の Bearer 認証ヘルパ
+    auth/api.ts           REST API の Bearer 認証と安全なエラーレスポンス変換
     image.ts              S3 の削除/存在確認/署名付き GET・POST
     listing-calc.ts       出品の損益計算
     format.ts             表示整形
+    validation/           日付・整数・金額の共通入力検証
   types/item.ts           アプリ共通の型
-infra/                    Terraform（VPC/Cognito/RDS/S3/ECR/EC2/CloudFront/SSM/IAM）
+infra/                    Terraform（VPC/Cognito/RDS/S3/ECR/EC2/CloudFront/SSM/IAM/CloudWatch）
 ```
 
 ## セキュリティ方針
 
 - アプリは **非所有者ロール `monolog_app`** で DB に接続し、各操作を `withUser(sub, fn)`（トランザクション内 `set_config(..., true)`）で包む。RLS ポリシーは `user_id = app.current_user_id()` で**自分の行だけ**に制限（オブジェクトレベル認可）。
 - 認証は **Cognito**。ID トークンは **JWKS** で署名検証し、トークンは httpOnly Cookie に保存。失効時は middleware が自動リフレッシュ。
-- 画像は**非公開 S3**。表示は署名付き GET、送信は形式・10MB上限・5分期限を持つ署名付き POST を使う。画像本体はアプリサーバーを経由しない。
+- 入力検証で判定できるエラーだけを安全なメッセージとして返し、Prisma・SQL・AWSなどの内部エラー詳細はクライアントへ公開せず、サーバーログに記録する。
+- 画像は**非公開 S3**。表示時はNext.js Image Optimizerが署名付きGETを使い、送信時は形式・10MB上限・5分期限を持つ署名付きPOSTでブラウザからS3へ直接アップロードする。
 - 画像選択時にユーザー専用の `pending_item_image_uploads` を作り、アイテム保存とpending消費を同じDBトランザクションで確定する。DB保存に失敗した画像はpendingのまま残り、期限後の次回アップロード準備時にS3から削除する。
-- 本番 DB 接続は **SSL 必須**（`sslmode=require`）。EC2 は IAM ロールで最小権限（SSM 読取 / S3 オブジェクト RW）。機密は SSM Parameter Store（SecureString）で管理し、コードに秘密を書かない。
+- 本番 DB 接続は **SSL 必須**（`sslmode=require`）。EC2のIAMロールは、SSM接続・パラメータ読取、ECR読取、S3オブジェクト操作、CloudWatch Logs書込に権限を限定する。機密はSSM Parameter Store（SecureString）で管理し、コードに秘密を書かない。
 - EC2の80番ポートはCloudFrontのオリジン向けIP範囲だけを許可し、さらにCloudFront固有の秘密ヘッダーをmiddlewareで検証する。IP範囲を共有する別のCloudFront distributionや直接のオリジン要求は403にする。
 
 ## 既知の制限
 
 - 画像は1アイテムあたり1枚
 - インポートは追記のみ（重複検出なし）
-- 単一ユーザーモデル（共有・閲覧権限の譲渡は無し）
+- データはユーザーごとに分離され、他ユーザーとの共有・共同編集・所有権譲渡には未対応
+- 本番は単一EC2・Single-AZ RDS構成で、自動的な水平スケールやMulti-AZ冗長化には未対応
