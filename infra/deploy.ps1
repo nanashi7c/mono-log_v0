@@ -1,5 +1,5 @@
 # Deploy the app: resolve an immutable tag -> build/push if needed -> refresh the EC2 container.
-# Prereq: terraform apply done (EC2 running); docker + aws CLI installed; run migrate.ps1 first on a fresh RDS.
+# Prereq: terraform apply done (EC2 running); docker + aws CLI installed; run migrate.ps1 for the created or restored RDS.
 # Usage (from infra/): powershell -ExecutionPolicy Bypass -File deploy.ps1
 # Rollback:            powershell -ExecutionPolicy Bypass -File deploy.ps1 -Rollback
 

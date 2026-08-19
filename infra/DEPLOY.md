@@ -18,16 +18,33 @@ terraform init      # 初回や別マシンのみ
 terraform plan      # 作成内容を確認
 terraform apply     # yes で作成（RDS は数分かかる）
 ```
+- `mono-log-db-20260629`から復元する場合は、`plan`と`apply`の両方に`-var="db_snapshot_identifier=mono-log-db-20260629"`を付ける。このスナップショットは適用履歴導入前のため、手順2で専用オプションを使う
 - 新しい RDS エンドポイント・EC2・CloudFront が作られ、SSM パラメータと CloudFront オリジンは自動で更新される
 - 初回構築では配備タグが`not-deployed`のためアプリは未起動（systemdが30秒ごとに再試行）。再作成時はSSMに残る固定タグのイメージがECRにあれば自動起動
 
 ### 2. DB マイグレーション（RDS 再作成のたびに1回）
+
+空のRDSを作成した場合:
+
 ```powershell
 powershell -File migrate.ps1
 ```
-- `0001_init.sql` / `0002_seed.sql` を S3 経由で EC2 に渡し、SSM 経由で RDS に適用
+
+`mono-log-db-20260629`のように初期マイグレーション適用済みのスナップショットから復元した場合:
+
+```powershell
+powershell -File migrate.ps1 -RestoredSnapshot
+```
+
+- 実行前に候補だけ確認する場合は末尾に`-ListMigrations`を付ける。このオプションはAWSへ接続しないため、DB上で適用済みかどうかの判定は実行時に行う
+- 空DBでは全マイグレーション、復元DBではスナップショットに含まれる初期2件を除くマイグレーションを日時順に適用する
+- 適用済みの名前と改行コードを正規化したSHA-256を`app.schema_migrations`へ記録し、再実行や将来のSQL追加時は未適用分だけを実行する。適用済みSQLの変更・削除・改名を検知した場合は停止する
+- DBの排他ロック取得後、同じ接続内で適用履歴を再判定するため、複数実行が重なっても同じSQLを二重適用しない
+- 全SQLを1トランザクションで適用するため、途中で失敗した場合は今回の変更全体がロールバックされる
+- 復元指定の誤りや、適用履歴のない既存DBへの通常実行はSQL適用前に停止する
 - 併せて `monolog_app` ロールのパスワードを SSM (`/mono-log/db/app_password`) の値に設定
-- 出力 `Status: Success` を確認
+- `migrations completed successfully`が表示されれば成功
+- SSM待機が10分を超えた場合はキャンセルを要求して停止する。表示されたコマンドIDが`Cancelled`、`Failed`、`Success`などの終了状態になったことを確認するまで再実行しない
 
 ### 3. アプリをビルドして配備
 ```powershell
@@ -88,7 +105,7 @@ Remove-Item Env:TF_VAR_db_deletion_safety
 - RDSが既に存在しない場合は環境変数を削除し、`aws_db_instance.main`を外してEC2とCloudFrontだけをdestroyする
 - 解除後に削除を中止した場合は、`Remove-Item Env:TF_VAR_db_deletion_safety`の後に`terraform apply -target=aws_db_instance.main`を実行して削除保護を有効に戻す
 - 最終スナップショットはRDS削除後も残り、保存容量に応じて課金される。不要になったら内容を確認してAWS上で削除する
-- 新しい空のRDSで再開する場合は手順2のマイグレーションをやり直す。保存したデータを使う場合は`db_snapshot_identifier`を指定して復元する
+- 新しい空のRDSでは手順2を通常実行する。`app.schema_migrations`を含む新しいスナップショットは復元後も通常実行し、履歴導入前の`mono-log-db-20260629`だけは手順2を`-RestoredSnapshot`付きで実行する
 - 完全に消す場合は `terraform destroy`（tfstate/S3/Cognito は別管理なので残ることがある）
 
 ## メモ
