@@ -1,6 +1,6 @@
 # mono-log インフラ設計書（AWS）
 
-最終更新: 2026-06-13
+最終更新: 2026-08-19
 対象アプリ: Next.js 15 (App Router) + React 19 + TypeScript / Server Actions + REST API(/api/v1)
 構成方針: AWS ネイティブ（Cognito 認証 / RDS PostgreSQL / S3 / CloudFront）。アプリは Docker コンテナ化して EC2 で運用（同一イメージで ECS Fargate へ移行可能）。クエリ層は Prisma、DDL/RLS は Prisma Migrate の手書きSQLで管理。
 
@@ -45,6 +45,37 @@ graph TD
 | S3 | 商品画像を非公開保存。表示/保存は署名付きURL | 公開ブロック＋SSE |
 | SSM Parameter Store | DB接続情報・パスワード・Cognito ID・バケット名 | String / SecureString |
 | ECR | アプリのコンテナイメージ保管 | 直近10個保持 |
+
+### 1.1 設計レビュー
+
+現構成は、個人開発・検証環境・小規模サービスで固定費を抑える設計として妥当です。private RDS、非所有者DBロールとRLS、非公開S3、IMDSv2、非rootコンテナなど、主要な信頼境界は明示されています。
+
+一方、単一EC2・Single-AZ RDSと、削除・デプロイ・監視の安全策を意図的に簡略化しています。そのため、可用性やデータ保全を求める本番環境へそのまま適用する構成ではありません。優先度順の改善点は次のとおりです。
+
+| 優先度 | 対象 | 現状とリスク | 推奨する改善 |
+| --- | --- | --- | --- |
+| P0 | RDS削除安全性 | `skip_final_snapshot = true`、`deletion_protection = false`のため、誤ったdestroyやreplaceで復旧点を失う | 本番用変数で削除保護を有効化し、最終スナップショットを必須にする。復元手順も定期確認する |
+| P1 | DB通信許可 | PostgreSQL 5432をVPC CIDR全体へ許可しており、将来VPC内リソースが増えるほど到達主体が広がる | 接続元をEC2のSecurity Groupへ限定する |
+| P1 | オリジン保護 | CloudFrontからEC2まではHTTPで、CloudFront共通の送信元IPだけを信頼している | オリジン間TLSと、CloudFront固有ヘッダー等によるオリジン識別を導入する |
+| P1 | デプロイ再現性 | ECRの`latest`を上書きするため、稼働イメージの特定と即時ロールバックが難しい | commit SHA等のimmutable tagまたはdigestでデプロイし、直前の値を保持する |
+| P1 | 監視・自動復旧 | コンテナとEC2/RDSの基本メトリクス、外形監視、通知、ログ集約が未定義 | health endpoint、CloudWatch Logs/Alarm、ディスク・CPU・DB接続数・5xx通知を追加する |
+| P2 | DBサーバー検証 | `sslmode=require`は暗号化するが、接続先証明書の検証までは行わない | RDS CAを配布し、運用確認後に`verify-full`相当へ移行する |
+| P2 | Terraform state | DBパスワードは暗号化されたS3 backendに置かれるが、state閲覧権限者には平文で見える | state bucketの公開ブロック・暗号化・versioning・最小権限・監査ログを確認する |
+| P2 | 可用性 | EC2とRDSが単一AZ・単一インスタンスで、障害時は停止する | 利用要件が上がった時点でMulti-AZ RDSとALB/ECSまたはASGへ移行する |
+
+P0/P1は一度に変更せず、「DB削除安全性」「ネットワーク境界」「immutable deploy」「監視」の順にPRを分けます。各PRで`terraform plan`を保存し、置換対象が意図どおりか確認してからapplyします。
+
+### 1.2 Docker構成レビュー
+
+`Dockerfile`はmulti-stage build、`npm ci`、Next.js standalone出力、Prisma engineの明示コピー、非root実行を採用しており、現在のEC2 ARM環境に対して責務とイメージサイズのバランスが取れています。`.dockerignore`も依存・生成物・秘密情報をbuild contextから除外しています。
+
+改善点は次のとおりです。
+
+- `node:22-alpine`と`postgres:16`は可変タグなので、更新手順を決めたうえでdigest固定またはpatch version固定を検討する。
+- Dockerfileに`HEALTHCHECK`がなく、EC2上のsystemdもアプリのHTTP応答までは監視しない。外形監視と合わせて死活判定を追加する。
+- コンテナログはEC2ローカルに留まるため、CloudWatch Logs等へ転送し、ローテーションと保持期間を定義する。
+- `docker run`にCPU・メモリ上限がなく、異常時にホスト全体へ影響し得る。t4g.microの容量を踏まえ、計測後に上限を設定する。
+- ローカル`compose.yaml`はPostgreSQLだけを提供し、Next.jsはホストで実行する構成である。この境界を維持し、本番DockerfileとローカルDB composeを同一用途として扱わない。
 
 ---
 

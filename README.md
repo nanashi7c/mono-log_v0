@@ -30,6 +30,61 @@
 | API | 外部向け REST `/api/v1`（Cognito の Bearer トークン認証） |
 | ホスティング | EC2 + Docker + CloudFront。IaC は **Terraform**。ローカルは Docker の PostgreSQL |
 
+## アーキテクチャ
+
+実行時は、画面操作と外部APIをCloudFront経由でNext.jsへ集約します。認証はCognito、永続化と認可はRDS PostgreSQL、画像本体は非公開S3が担当します。
+
+画像の選択時だけ通信経路が異なります。Next.jsは認証・入力検証・署名付きPOSTの発行を行い、画像本体はアプリサーバーを経由せずブラウザからS3へ直接送信します。これにより、EC2の通信量とメモリ使用量を抑えます。
+
+```mermaid
+flowchart LR
+    Browser["ブラウザ<br/>画面・httpOnly Cookie"]
+    ApiClient["外部クライアント<br/>REST・Bearer JWT"]
+    CF["CloudFront<br/>HTTPS終端"]
+
+    subgraph Runtime["EC2 / Docker / Next.js standalone"]
+        MW["middleware<br/>トークン更新"]
+        Delivery["App Router<br/>Server Components / Actions / Route Handlers"]
+        UseCase["Application<br/>Use Cases / Ports"]
+        Domain["Domain<br/>状態遷移・純粋関数"]
+        Infra["Infrastructure<br/>Prisma / AWS adapters"]
+        MW --> Delivery --> UseCase
+        UseCase --> Domain
+        UseCase --> Infra
+    end
+
+    Browser -->|"HTTPS"| CF
+    ApiClient -->|"HTTPS / api/v1"| CF
+    CF -->|"HTTP :80"| MW
+    Delivery <-->|"認証・JWT"| Cognito["Amazon Cognito"]
+    Infra -->|"Prisma transaction<br/>set_config + RLS"| RDS[("RDS PostgreSQL<br/>private subnet")]
+    Infra -->|"署名発行・検査・削除"| S3["S3 item-images<br/>非公開"]
+    Browser -->|"署名付きPOST / GET<br/>画像本体を直接転送"| S3
+    SSM["SSM Parameter Store"] -->|"起動時に環境変数を注入"| Runtime
+    ECR["ECR"] -->|"Docker image pull"| Runtime
+```
+
+アプリ内部は、技術詳細をapplication/domainから遠ざける方向で分割しています。画面・Server Action・Route Handlerがユースケースを呼び、DBやS3の実装はapplication層で定義したportを実装します。
+
+```mermaid
+flowchart LR
+    Presentation["Presentation<br/>app / components / API routes"] --> Application["Application<br/>use cases / input / ports"]
+    Application --> Domain["Domain<br/>rules / calculations / transitions"]
+    Infrastructure["Infrastructure<br/>Prisma repositories / S3 stores"] -. "portsを実装" .-> Application
+    Presentation -. "依存を組み立てる" .-> Infrastructure
+    Adapters["Adapters<br/>Form・API・CSVの変換"] --> Application
+    Infrastructure --> External["RDS / Cognito / S3"]
+```
+
+設計上の原則は次のとおりです。
+
+- DB操作は`withUser`内のトランザクションに閉じ、RLSの利用者コンテキストを必ず設定する。
+- domainはI/Oを持たない純粋関数、applicationはユースケースとport、infrastructureはPrisma・AWS SDKの詳細を担当する。
+- Cookie・URL・DBを状態の正本とし、クライアント側はフォームやメニューなど短命なUI状態だけをReact hooksで持つ。
+- S3の署名はアプリが発行し、画像本体の転送はブラウザとS3の間で行う。ただしアイテム保存との確定状態はDBで管理する。
+
+AWSリソース、ネットワーク、Docker、運用上の制約と改善優先度は[インフラ設計](docs/infra-design.md)を参照してください。
+
 ## データベース構成
 
 カラム名と型は、実際のPostgreSQL上の定義を表しています。詳細は [DBスキーマ設計](docs/db-design.md) を参照してください。
