@@ -66,7 +66,7 @@ export default async function MyPage({
   // 退会は Cognito のセルフサービスで常に可能。
   const adminConfigured = true;
 
-  const errorMsg = error ? ERROR_MESSAGES[error] ?? decodeURIComponent(error) : null;
+  const errorMsg = error ? ERROR_MESSAGES[error] ?? error : null;
   const okMsg = ok ? SUCCESS_MESSAGES[ok] ?? decodeURIComponent(ok) : null;
 
   return (

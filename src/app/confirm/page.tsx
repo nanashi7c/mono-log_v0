@@ -26,7 +26,7 @@ export default async function ConfirmPage({
           />
         </label>
         {error ? (
-          <p className={styles.error}>{decodeURIComponent(error)}</p>
+          <p className={styles.error}>{error}</p>
         ) : null}
         <button type="submit" className={styles.submit}>
           確認する

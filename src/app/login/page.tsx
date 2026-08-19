@@ -46,7 +46,7 @@ export default async function LoginPage({
           </p>
         ) : null}
         {error ? (
-          <p className={styles.error}>{decodeURIComponent(error)}</p>
+          <p className={styles.error}>{error}</p>
         ) : null}
         <button type="submit" className={styles.submit}>
           ログイン

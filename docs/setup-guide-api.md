@@ -55,13 +55,20 @@ export function jsonError(status: number, message: string): NextResponse {
 export function unauthorized(): NextResponse { return jsonError(401, "unauthorized"); }
 export function badRequest(message: string): NextResponse { return jsonError(400, message); }
 
-export function dbErrorResponse(e: unknown): NextResponse {
-  const code = (e as { code?: string }).code;
-  // Prisma の既知エラー(P2xxx: 一意/FK/制約等)はクライアント起因が多いので 400
-  if (typeof code === "string" && /^P2\d{3}$/.test(code)) {
-    return jsonError(400, (e as Error).message);
+const CLIENT_INPUT_DATABASE_ERROR_CODES = new Set([
+  "P2000", "P2002", "P2003", "P2004", "P2006", "P2007",
+  "P2011", "P2014", "P2019", "P2020", "P2033",
+]);
+
+export function dbErrorResponse(error: unknown): NextResponse {
+  console.error("REST APIのデータ処理に失敗しました。", error);
+  const code =
+    typeof error === "object" && error !== null
+      ? (error as { code?: unknown }).code
+      : null;
+  if (typeof code === "string" && CLIENT_INPUT_DATABASE_ERROR_CODES.has(code)) {
+    return jsonError(400, "invalid request");
   }
-  console.error(e);
   return jsonError(500, "internal error");
 }
 ```
@@ -75,7 +82,7 @@ export function dbErrorResponse(e: unknown): NextResponse {
   - `catch { return null }`: 不正/失効は`null`(呼び元が401を返す)。
 - `jsonError(status, message)`: `NextResponse.json({ error }, { status })`で**統一エラーJSON**。
 - `unauthorized()`=401、`badRequest(msg)`=400 の薄いラッパ。
-- `dbErrorResponse(e)`: DB例外をHTTPに振り分け。`(e).code`がPrismaのエラーコード。`P2xxx`(一意`P2002`/FK`P2003`等)=クライアント起因が多い→**400**。それ以外は`console.error`して500。
+- `dbErrorResponse(error)`: DB例外の詳細をサーバーログに残し、クライアントへは固定メッセージだけを返す。入力値や整合性制約に対応する明示済みコードは`400 invalid request`、接続・トランザクション・実装上の障害などは`500 internal error`。
 
 ---
 

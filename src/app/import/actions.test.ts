@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ItemImportInput } from "@/features/items/application/item-import-input";
 
 const mocks = vi.hoisted(() => ({
@@ -37,6 +37,10 @@ vi.mock("@/lib/auth/session", () => ({
 
 import { importBackup } from "@/app/import/actions";
 
+const consoleError = vi
+  .spyOn(console, "error")
+  .mockImplementation(() => undefined);
+
 const input: ItemImportInput = {
   categories: [],
   items: [],
@@ -58,6 +62,10 @@ beforeEach(() => {
   mocks.getCurrentUser.mockResolvedValue({ sub: "user-1" });
   mocks.parseItemBackupCsv.mockReturnValue({ ok: true, value: input });
   mocks.importItemsUseCase.mockResolvedValue({ insertedItems: 2 });
+});
+
+afterAll(() => {
+  consoleError.mockRestore();
 });
 
 describe("importBackup", () => {
@@ -93,13 +101,18 @@ describe("importBackup", () => {
     expect(mocks.importItemsUseCase).not.toHaveBeenCalled();
   });
 
-  it("永続化エラーをインポート画面へ渡す", async () => {
-    mocks.importItemsUseCase.mockRejectedValue(new Error("database error"));
+  it("永続化エラーの詳細を公開せず、固定エラーコードで戻す", async () => {
+    const internalError = new Error("database error");
+    mocks.importItemsUseCase.mockRejectedValue(internalError);
 
     await expect(importBackup(backupFormData())).rejects.toThrow(
-      "redirect:/import?error=database%20error",
+      "redirect:/import?error=import-failed",
     );
 
+    expect(consoleError).toHaveBeenCalledWith(
+      "CSVインポートの保存に失敗しました。",
+      internalError,
+    );
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
