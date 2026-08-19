@@ -32,7 +32,7 @@
 
 ## アーキテクチャ
 
-実行時は、画面操作と外部APIをCloudFront経由でNext.jsへ集約します。認証はCognito、永続化と認可はRDS PostgreSQL、画像本体は非公開S3が担当します。
+実行時は、画面操作と外部APIをCloudFront経由でNext.jsへ集約します。CloudFrontはオリジン向けの秘密ヘッダーを付け、Next.jsのmiddlewareが一致を確認してから処理を続けます。認証はCognito、永続化と認可はRDS PostgreSQL、画像本体は非公開S3が担当します。
 
 画像の選択時だけ通信経路が異なります。Next.jsは認証・入力検証・署名付きPOSTの発行を行い、画像本体はアプリサーバーを経由せずブラウザからS3へ直接送信します。これにより、EC2の通信量とメモリ使用量を抑えます。
 
@@ -55,7 +55,7 @@ flowchart LR
 
     Browser -->|"HTTPS"| CF
     ApiClient -->|"HTTPS / api/v1"| CF
-    CF -->|"HTTP :80"| MW
+    CF -->|"HTTP :80<br/>オリジン検証ヘッダー"| MW
     Delivery <-->|"認証・JWT"| Cognito["Amazon Cognito"]
     Infra -->|"Prisma transaction<br/>set_config + RLS"| RDS[("RDS PostgreSQL<br/>private subnet")]
     Infra -->|"署名発行・検査・削除"| S3["S3 item-images<br/>非公開"]
@@ -268,7 +268,7 @@ prisma/
   schema.prisma           Prisma のテーブル定義（クエリ型。db pull 由来・@map で camelCase）
   migrations/             DDL＋RLS＋ロール＋seed の手書きSQL（Prisma Migrate 管理）
 src/
-  middleware.ts           全リクエスト前処理（トークン期限切れ時の自動リフレッシュ）
+  middleware.ts           全リクエスト前処理（オリジン検証・トークン自動更新）
   app/
     page.tsx              ランディング
     login/ signup/ confirm/   認証画面
@@ -304,6 +304,7 @@ infra/                    Terraform（VPC/Cognito/RDS/S3/ECR/EC2/CloudFront/SSM/
 - 画像は**非公開 S3**。表示は署名付き GET、送信は形式・10MB上限・5分期限を持つ署名付き POST を使う。画像本体はアプリサーバーを経由しない。
 - 画像選択時にユーザー専用の `pending_item_image_uploads` を作り、アイテム保存とpending消費を同じDBトランザクションで確定する。DB保存に失敗した画像はpendingのまま残り、期限後の次回アップロード準備時にS3から削除する。
 - 本番 DB 接続は **SSL 必須**（`sslmode=require`）。EC2 は IAM ロールで最小権限（SSM 読取 / S3 オブジェクト RW）。機密は SSM Parameter Store（SecureString）で管理し、コードに秘密を書かない。
+- EC2の80番ポートはCloudFrontのオリジン向けIP範囲だけを許可し、さらにCloudFront固有の秘密ヘッダーをmiddlewareで検証する。IP範囲を共有する別のCloudFront distributionや直接のオリジン要求は403にする。
 
 ## 既知の制限
 

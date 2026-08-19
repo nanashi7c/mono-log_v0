@@ -285,7 +285,7 @@ S3_IMAGE_BUCKET=mono-log-item-images-＜あなたのアカウントID＞
 ### ディレクトリ構成
 ```
 src/
-  middleware.ts            … 全リクエスト前処理。トークン期限切れ時の自動リフレッシュ
+  middleware.ts            … オリジン検証とトークン期限切れ時の自動リフレッシュ
   app/
     layout.tsx, page.tsx   … 共通レイアウト/ランディング
     login/ signup/ confirm/… 認証画面
@@ -303,6 +303,7 @@ src/
     client.ts              … Prisma Client(遅延生成) + withUser(RLSコンテキスト実行)
     serialize.ts           … Prisma行(BigInt/Decimal/Date) → アプリ型(number/文字列)変換
   lib/
+    origin-verification.ts … CloudFrontが付ける秘密ヘッダーの照合
     auth/cognito.ts        … Cognito SDKラッパ + JWT検証
     auth/session.ts        … httpOnly Cookieでトークン保持
     image.ts               … S3への保存/削除/署名付きURL
@@ -332,7 +333,10 @@ src/
 5. **JWT検証は遅延生成（`lib/auth/cognito.ts`）**
    `CognitoJwtVerifier.create()`をモジュール読み込み時に呼ぶと、ビルド時は環境変数が無く`userPoolId`がundefinedで`next build`が落ちます。初回利用時に生成する関数で包みます。`PrismaClient`も同様にビルド時クラッシュ回避のため遅延生成します。
 
-5. **トークン自動更新（`middleware.ts`）**
+6. **オリジン要求の検証（`middleware.ts`）**
+   本番EC2では、CloudFrontだけが付ける秘密ヘッダーを全リクエストの最初に照合します。セキュリティグループのCloudFront向けIP制限と組み合わせ、別のCloudFront distributionからEC2へ到達した要求も403にします。ローカルとVercelでは検証用環境変数を設定しないため、この検証だけを無効にできます。
+
+7. **トークン自動更新（`middleware.ts`）**
    IDトークンの期限（約1時間）切れを検知し、リフレッシュトークンで再発行してCookieを差し替えます。これでこまめに再ログインせずに済みます。
 
 ---
@@ -433,8 +437,8 @@ terraform apply    # yes で作成。RDS作成に数分かかる
 - **storage.tf**: 画像用S3（全公開ブロック+SSE）+ SSM（s3/bucket）
 - **database.tf**: RDS（`db.t4g.micro`, PG16, private, 20GB）+ マスタ/アプリ両ロールのパスワードをSSMに（`db/password`, `db/app_password`）+ 接続情報SSM（host/port/name/username）
 - **ecr.tf**: イメージ保管庫 + 直近10個保持のライフサイクル
-- **compute.tf**: EC2用IAMロール（SSM読取・ECR読取・S3 RW）+ EC2（ARM, Docker自動導入, 起動時にSSMから設定取得して`docker run`）+ ルート30GB
-- **cdn.tf**: CloudFront（HTTPS強制・キャッシュ無効・全ヘッダ転送、オリジン=EC2）
+- **compute.tf**: EC2用IAMロール（SSM読取・ECR読取・S3 RW）+ EC2（ARM, Docker自動導入, 起動時にSSMから設定とオリジン検証秘密値を取得して`docker run`）+ ルート30GB
+- **cdn.tf**: CloudFront（HTTPS強制・キャッシュ無効・全ヘッダ転送、オリジン=EC2、オリジン検証用の秘密ヘッダー）
 
 > この時点ではEC2にイメージがまだ無いため、アプリは未起動（systemdが30秒ごとに再試行）です。次の11〜12章で投入します。
 
@@ -603,4 +607,5 @@ terraform apply        # RDS/EC2/CloudFrontを再作成（DNS/CloudFrontドメ�
 | `AWS_REGION` | cognito/image | ap-northeast-1 | ap-northeast-1 |
 | `COGNITO_USER_POOL_ID`/`COGNITO_CLIENT_ID` | `lib/auth/cognito.ts` | SSM/出力の値 | SSMから |
 | `S3_IMAGE_BUCKET` | `lib/image.ts` | `mono-log-item-images-<acct>` | SSMから |
+| `CLOUDFRONT_ORIGIN_VERIFY_SECRET` | `middleware.ts` | 未設定（検証無効） | SSM `cloudfront/origin_verify_secret`から |
 | `NODE_ENV` | client/session | development | production（SSL・secure Cookie有効） |

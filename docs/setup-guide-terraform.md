@@ -765,7 +765,7 @@ resource "aws_security_group" "ec2" {
 }
 ```
 **逐行解説**
-- EC2のSG。`ingress`は80番(HTTP)を`prefix_list_ids`(CloudFrontのIP範囲)からのみ許可＝**直アクセス不可、CloudFront経由のみ**。
+- EC2のSG。`ingress`は80番(HTTP)を`prefix_list_ids`(CloudFrontのオリジン向けIP範囲)からのみ許可し、インターネットからEC2への直接接続を防ぐ。別のCloudFront distributionとの区別は、後述する秘密ヘッダーの照合で行う。
 - `egress`は全許可(ECR/SSM/Cognito/S3への外向き通信に必要)。
 
 ```hcl
@@ -792,6 +792,7 @@ resource "aws_instance" "app" {
   subnet_id              = aws_subnet.public_a.id
   vpc_security_group_ids = [aws_security_group.ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
+  depends_on             = [aws_ssm_parameter.cloudfront_origin_verify_secret]
   user_data = <<-EOF
 ... (後述の起動スクリプト) ...
 EOF
@@ -812,6 +813,7 @@ EOF
 - `subnet_id = aws_subnet.public_a.id`: publicサブネットに配置(外部到達のため)。
 - `vpc_security_group_ids`: 上のEC2用SGを適用。
 - `iam_instance_profile`: 上のプロファイル＝ロールを付与。
+- `depends_on`: オリジン検証用のSSM SecureStringが作られてからEC2を起動し、初回の設定取得失敗を防ぐ。
 - `user_data = <<-EOF ... EOF`: **起動時に1回だけ走るシェルスクリプト**(下で詳説)。`<<-EOF`はヒアドキュメント(複数行文字列)。
 - `metadata_options { http_tokens = "required" }`: IMDSv2を強制(認証情報の盗用対策)。
 - `root_block_device { volume_size = 30; volume_type = "gp3"; encrypted = true }`: ルートディスク30GB(最新AL2023 AMIのスナップショットが30GBのため20では作成失敗)・gp3・暗号化。
@@ -847,9 +849,11 @@ set -euo pipefail
 get() { aws ssm get-parameter --region "$REGION" --name "$1" $2 --query Parameter.Value --output text; }
 DB_HOST=$(get "/$PROJECT/db/host" "")
 ...
+ORIGIN_VERIFY_SECRET=$(get "/$PROJECT/cloudfront/origin_verify_secret" "--with-decryption")
 docker run -d --name mono-log --restart unless-stopped -p 80:3000 \
   -e NODE_ENV=production \
   -e DB_HOST="$DB_HOST" ... \
+  -e CLOUDFRONT_ORIGIN_VERIFY_SECRET="$ORIGIN_VERIFY_SECRET" \
   "$IMAGE"
 SCRIPT
 chmod +x /usr/local/bin/mono-log-run.sh
@@ -857,10 +861,10 @@ chmod +x /usr/local/bin/mono-log-run.sh
 - `cat > ... <<'SCRIPT' ... SCRIPT`: コンテナ起動スクリプトを書き出す。クォート付き`'SCRIPT'`なので**中の`$`はそのまま**(Terraformでなく実行時のbashが評価)。
 - `. /etc/mono-log.env`: 上のenvファイルを読み込み(`REGION`等が使える)。
 - `get() { aws ssm get-parameter ... }`: SSMから値を取る関数。`$2`に`--with-decryption`を渡せば`SecureString`を復号。
-- `DB_HOST=$(get ...)`等: DB接続情報・Cognito ID・バケット名・**アプリ用DBパスワード(復号)**をSSMから取得。
+- `DB_HOST=$(get ...)`等: DB接続情報・Cognito ID・バケット名・**アプリ用DBパスワードとCloudFrontオリジン検証秘密値(復号)**をSSMから取得。
 - `aws ecr get-login-password | docker login ...`: ECRにログイン。
 - `docker pull "$IMAGE"` → `docker rm -f mono-log || true` → `docker run -d ...`: 最新イメージを取得し、既存コンテナを消してから起動。
-- `docker run`の主オプション: `-d`(常駐)、`--restart unless-stopped`(再起動時も自動復帰)、`-p 80:3000`(ホスト80→コンテナ3000)、`-e KEY=VALUE`(環境変数。DB/Cognito/S3/NODE_ENV=productionを渡す)。
+- `docker run`の主オプション: `-d`(常駐)、`--restart unless-stopped`(再起動時も自動復帰)、`-p 80:3000`(ホスト80→コンテナ3000)、`-e KEY=VALUE`(環境変数。DB/Cognito/S3/オリジン検証秘密値/NODE_ENV=productionを渡す)。
 - `chmod +x`: スクリプトに実行権限。
 
 ```bash
@@ -905,9 +909,23 @@ data "aws_cloudfront_cache_policy" "caching_disabled" {
 data "aws_cloudfront_origin_request_policy" "all_viewer" {
   name = "Managed-AllViewer"
 }
+
+resource "random_password" "cloudfront_origin_verify" {
+  length  = 48
+  special = false
+}
+
+resource "aws_ssm_parameter" "cloudfront_origin_verify_secret" {
+  name        = "/${var.project_name}/cloudfront/origin_verify_secret"
+  description = "Shared secret for verifying CloudFront origin requests"
+  type        = "SecureString"
+  value       = random_password.cloudfront_origin_verify.result
+}
 ```
 **逐行解説**
 - AWS管理のポリシーを読み取る。`Managed-CachingDisabled`=キャッシュしない、`Managed-AllViewer`=全ヘッダ/Cookie/クエリをオリジンへ転送。動的アプリ向け。
+- `random_password`: 特定のCloudFront distributionとEC2上のアプリだけが共有する48文字の秘密値を生成。
+- `aws_ssm_parameter`: 生成値をSecureStringとして保存し、EC2起動時に復号してコンテナへ渡す。秘密値をコードやEC2のuser dataへ直接埋め込まない。
 
 ```hcl
 resource "aws_cloudfront_distribution" "app" {
@@ -917,6 +935,10 @@ resource "aws_cloudfront_distribution" "app" {
   origin {
     domain_name = aws_instance.app.public_dns
     origin_id   = "ec2-origin"
+    custom_header {
+      name  = "X-Mono-Log-Origin-Verify"
+      value = random_password.cloudfront_origin_verify.result
+    }
     custom_origin_config {
       http_port              = 80
       https_port             = 443
@@ -947,6 +969,7 @@ resource "aws_cloudfront_distribution" "app" {
 **逐行解説**
 - `aws_cloudfront_distribution "app"`: CDN/TLS終端。
 - `origin { domain_name = aws_instance.app.public_dns; ... }`: 配信元はEC2のパブリックDNS。
+  - `custom_header`: CloudFrontからオリジンへ送る要求へ秘密ヘッダーを追加する。同名ヘッダーを閲覧者が送ってもCloudFrontの設定値で上書きされる。
   - `custom_origin_config`: EC2への接続設定。`origin_protocol_policy = "http-only"`＝CloudFront→EC2は**HTTP**(内部)。`origin_ssl_protocols`はHTTPS時のTLS版(ここでは未使用だが必須項目)。
 - `default_cache_behavior { ... }`: 既定の配信動作。
   - `viewer_protocol_policy = "redirect-to-https"`: 視聴者には**HTTPSを強制**(HTTPはHTTPSへリダイレクト)。
@@ -960,7 +983,7 @@ resource "aws_cloudfront_distribution" "app" {
 ```bash
 terraform plan
 ```
-**逐行解説**: CloudFront distributionが並べばOK。全ファイルが揃った。
+**逐行解説**: CloudFront distribution、秘密値、SSM SecureStringが並べばOK。秘密値そのものがplan出力へ表示されていないことも確認する。
 
 ---
 

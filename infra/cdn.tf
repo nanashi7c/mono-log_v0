@@ -7,6 +7,19 @@ data "aws_cloudfront_origin_request_policy" "all_viewer" {
   name = "Managed-AllViewer"
 }
 
+# 特定のCloudFront distributionからのリクエストだけをEC2で受け付けるための共有秘密値。
+resource "random_password" "cloudfront_origin_verify" {
+  length  = 48
+  special = false
+}
+
+resource "aws_ssm_parameter" "cloudfront_origin_verify_secret" {
+  name        = "/${var.project_name}/cloudfront/origin_verify_secret"
+  description = "Shared secret for verifying CloudFront origin requests"
+  type        = "SecureString"
+  value       = random_password.cloudfront_origin_verify.result
+}
+
 # CDN/TLS。オリジンは EC2（HTTP）、視聴者には HTTPS を強制
 resource "aws_cloudfront_distribution" "app" {
   enabled = true
@@ -15,6 +28,11 @@ resource "aws_cloudfront_distribution" "app" {
   origin {
     domain_name = aws_instance.app.public_dns
     origin_id   = "ec2-origin"
+
+    custom_header {
+      name  = "X-Mono-Log-Origin-Verify"
+      value = random_password.cloudfront_origin_verify.result
+    }
 
     custom_origin_config {
       http_port              = 80
