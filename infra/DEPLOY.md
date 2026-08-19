@@ -18,7 +18,7 @@ terraform init      # 初回や別マシンのみ
 terraform plan      # 作成内容を確認
 terraform apply     # yes で作成（RDS は数分かかる）
 ```
-- `mono-log-db-20260629`から復元する場合は、`plan`と`apply`の両方に`-var="db_snapshot_identifier=mono-log-db-20260629"`を付ける。別時点のスナップショットは含まれるマイグレーションを確認し、`$SnapshotBaselineMigrations`を先に更新する
+- `mono-log-db-20260629`から復元する場合は、`plan`と`apply`の両方に`-var="db_snapshot_identifier=mono-log-db-20260629"`を付ける。このスナップショットは適用履歴導入前のため、手順2で専用オプションを使う
 - 新しい RDS エンドポイント・EC2・CloudFront が作られ、SSM パラメータと CloudFront オリジンは自動で更新される
 - 初回構築では配備タグが`not-deployed`のためアプリは未起動（systemdが30秒ごとに再試行）。再作成時はSSMに残る固定タグのイメージがECRにあれば自動起動
 
@@ -105,7 +105,7 @@ Remove-Item Env:TF_VAR_db_deletion_safety
 - RDSが既に存在しない場合は環境変数を削除し、`aws_db_instance.main`を外してEC2とCloudFrontだけをdestroyする
 - 解除後に削除を中止した場合は、`Remove-Item Env:TF_VAR_db_deletion_safety`の後に`terraform apply -target=aws_db_instance.main`を実行して削除保護を有効に戻す
 - 最終スナップショットはRDS削除後も残り、保存容量に応じて課金される。不要になったら内容を確認してAWS上で削除する
-- 新しい空のRDSでは手順2を通常実行する。保存したデータを使う場合は`db_snapshot_identifier`を指定して復元し、手順2を`-RestoredSnapshot`付きで実行する
+- 新しい空のRDSでは手順2を通常実行する。`app.schema_migrations`を含む新しいスナップショットは復元後も通常実行し、履歴導入前の`mono-log-db-20260629`だけは手順2を`-RestoredSnapshot`付きで実行する
 - 完全に消す場合は `terraform destroy`（tfstate/S3/Cognito は別管理なので残ることがある）
 
 ## メモ

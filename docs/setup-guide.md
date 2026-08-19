@@ -589,7 +589,7 @@ terraform apply        # 空のRDS/EC2/CloudFrontを再作成（DNS/CloudFront�
 # → 12章 deploy（ビルド→push→起動）
 ```
 
-現在保存している`mono-log-db-20260629`から再開する場合は、`terraform plan`と`terraform apply`の両方に`-var="db_snapshot_identifier=mono-log-db-20260629"`を付けます。その後、11章の`migrate.ps1 -RestoredSnapshot`でスナップショット作成後の追加マイグレーションだけを適用します。別時点のスナップショットを使う場合は、含まれるマイグレーションを確認し、`infra/migrate.ps1`の`$SnapshotBaselineMigrations`を先に更新してください。
+現在保存している`mono-log-db-20260629`から再開する場合は、`terraform plan`と`terraform apply`の両方に`-var="db_snapshot_identifier=mono-log-db-20260629"`を付けます。このスナップショットは適用履歴導入前のため、その後に11章の`migrate.ps1 -RestoredSnapshot`で初期2件を履歴へ登録し、追加分を適用します。今後作成する`app.schema_migrations`入りのスナップショットは、復元後も通常の`migrate.ps1`で未適用分だけを適用できます。
 
 ### コード更新だけのとき
 インフラを消していなければ、**12章のデプロイだけ**再実行すれば反映されます。

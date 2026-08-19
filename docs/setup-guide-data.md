@@ -862,7 +862,7 @@ powershell -ExecutionPolicy Bypass -File migrate.ps1 -RestoredSnapshot -ListMigr
 - `psql --single-transaction -v ON_ERROR_STOP=1`: 選択した全SQL、適用履歴、`monolog_app`のパスワード更新を1トランザクションにまとめる。1つでも失敗した場合、今回のDB変更は全体がロールバックされる。
 - SSMコマンドの状態を最大10分ポーリングし、`Success`以外を失敗として扱う。タイムアウト時はキャンセルを要求し、表示されたコマンドIDが終了状態になるまで再実行しない。`migrations completed successfully`が表示されれば完了。
 
-> `-RestoredSnapshot`は、現在保存している初期2件適用済みスナップショット向けである。将来、より新しいマイグレーションを含むスナップショットを基準にする場合は、`$SnapshotBaselineMigrations`とこの説明を同じPRで更新する。
+> `-RestoredSnapshot`は、適用履歴導入前に保存した初期2件適用済みの`mono-log-db-20260629`向けである。今後作成する`app.schema_migrations`入りのスナップショットは、復元後も通常の`migrate.ps1`を使う。
 
 ---
 
