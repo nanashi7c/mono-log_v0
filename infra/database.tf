@@ -26,18 +26,18 @@ resource "aws_db_subnet_group" "main" {
   }
 }
 
-# RDS用セキュリティグループ（VPC内からの5432のみ許可。後でEC2のSGに絞る）
+# RDS用セキュリティグループ（アプリEC2からの5432のみ許可）
 resource "aws_security_group" "rds" {
   name        = "${var.project_name}-rds-sg"
   description = "PostgreSQL access for RDS"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "PostgreSQL from within VPC"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = [aws_vpc.main.cidr_block] # 暫定: VPC内から。Phase 6でEC2のSGに限定
+    description     = "PostgreSQL from app EC2"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ec2.id]
   }
 
   egress {

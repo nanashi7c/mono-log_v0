@@ -511,11 +511,11 @@ resource "aws_security_group" "rds" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "PostgreSQL from within VPC"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = [aws_vpc.main.cidr_block]
+    description     = "PostgreSQL from app EC2"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ec2.id]
   }
   egress {
     from_port   = 0
@@ -528,9 +528,8 @@ resource "aws_security_group" "rds" {
 ```
 **逐行解説**
 - `aws_security_group "rds"`: RDSの仮想ファイアウォール。
-- `ingress { ... }`: 受信ルール。`from_port`/`to_port`=5432(PostgreSQL)、`protocol="tcp"`、`cidr_blocks=[VPCのCIDR]`＝**VPC内からの5432だけ**許可。
+- `ingress { ... }`: 受信ルール。`from_port`/`to_port`=5432(PostgreSQL)、`protocol="tcp"`、`security_groups=[EC2のSG]`＝**アプリEC2からの5432だけ**許可。同じVPC内でも、EC2用SGが付いていないリソースからは接続できない。
 - `egress { from_port=0; to_port=0; protocol="-1"; cidr_blocks=["0.0.0.0/0"] }`: 送信は全許可(`-1`=全プロトコル)。
-- （EC2のSGに絞るとより厳格だが、ここではVPC内に限定）。
 
 ```hcl
 resource "aws_db_instance" "main" {
