@@ -3,6 +3,7 @@ import { Field, FieldGroup } from "@/components/item-form/field";
 import { ItemImageField } from "@/components/item-form/item-image-field";
 import type { PrepareItemImageUploadResult } from "@/features/items/application/item-image-upload-use-cases";
 import { ACTUAL_PRICE_MAX } from "@/lib/validation/actual-price";
+import { DATE_ONLY_MAX, DATE_ONLY_MIN } from "@/lib/validation/date-only";
 import { INTEGER_MAX } from "@/lib/validation/numeric";
 import type { Category, Item, ItemStatus } from "@/types/item";
 import styles from "@/components/item-form.module.css";
@@ -112,6 +113,8 @@ export function BasicItemSection({
           <input
             name="purchased_at"
             type="date"
+            min={DATE_ONLY_MIN}
+            max={DATE_ONLY_MAX}
             defaultValue={item?.purchased_at ?? ""}
             className={styles.input}
           />

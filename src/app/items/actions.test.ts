@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ItemWriteRejectedError } from "@/features/items/application/item-write-error";
 import type { ItemWriteInput } from "@/features/items/application/item-write-input";
 
 const mocks = vi.hoisted(() => ({
@@ -67,7 +68,11 @@ vi.mock("@/lib/auth/session", () => ({
   getCurrentUser: mocks.getCurrentUser,
 }));
 
-import { deleteItem, updateItem } from "@/app/items/actions";
+import { createItem, deleteItem, updateItem } from "@/app/items/actions";
+
+const consoleError = vi
+  .spyOn(console, "error")
+  .mockImplementation(() => undefined);
 
 const input = {
   name: "test item",
@@ -112,6 +117,30 @@ beforeEach(() => {
   });
 });
 
+afterAll(() => {
+  consoleError.mockRestore();
+});
+
+describe("createItem", () => {
+  it("想定外のエラー詳細を公開せず、固定エラーコードで追加画面へ戻す", async () => {
+    const internalError = new Error(
+      'Invalid prisma.item.create() invocation: invalid DateTime',
+    );
+    mocks.createItemUseCase.mockRejectedValue(internalError);
+
+    await expect(createItem(new FormData())).rejects.toThrow(
+      "redirect:/items/new?error=save-failed",
+    );
+
+    expect(mocks.redirect).toHaveBeenCalledWith("/items/new?error=save-failed");
+    expect(consoleError).toHaveBeenCalledWith(
+      "アイテムの作成に失敗しました。",
+      internalError,
+    );
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
 describe("updateItem", () => {
   it("更新対象が存在しない場合は404にし、キャッシュを更新しない", async () => {
     mocks.updateItemUseCase.mockResolvedValue({ type: "not_found" });
@@ -123,16 +152,38 @@ describe("updateItem", () => {
     expect(mocks.redirect).not.toHaveBeenCalled();
   });
 
-  it("更新に失敗した場合はエラー付き編集画面へ遷移する", async () => {
-    mocks.updateItemUseCase.mockRejectedValue(new Error("database error"));
+  it("想定外のエラー詳細を公開せず、固定エラーコードで編集画面へ戻す", async () => {
+    const internalError = new Error("database error");
+    mocks.updateItemUseCase.mockRejectedValue(internalError);
 
     await expect(updateItem(10, new FormData())).rejects.toThrow(
-      "redirect:/items/10/edit?error=database%20error",
+      "redirect:/items/10/edit?error=save-failed",
     );
 
     expect(mocks.redirect).toHaveBeenCalledWith(
-      "/items/10/edit?error=database%20error",
+      "/items/10/edit?error=save-failed",
     );
+    expect(consoleError).toHaveBeenCalledWith(
+      "アイテムの更新に失敗しました。",
+      internalError,
+    );
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("利用者が修正できるエラーだけを編集画面へ返す", async () => {
+    mocks.updateItemUseCase.mockRejectedValue(
+      new ItemWriteRejectedError("invalid_categories"),
+    );
+
+    const expectedPath = `/items/10/edit?error=${encodeURIComponent(
+      "選択されたカテゴリが存在しないか、このユーザーには利用できません。",
+    )}`;
+    await expect(updateItem(10, new FormData())).rejects.toThrow(
+      `redirect:${expectedPath}`,
+    );
+
+    expect(mocks.redirect).toHaveBeenCalledWith(expectedPath);
+    expect(consoleError).not.toHaveBeenCalled();
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 

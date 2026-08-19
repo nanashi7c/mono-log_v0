@@ -1,5 +1,8 @@
 type DateOnlyValidationError = Readonly<{ ok: false; error: string }>;
 
+export const DATE_ONLY_MIN = "0001-01-01";
+export const DATE_ONLY_MAX = "9999-12-31";
+
 export type DateOnlyValidationResult =
   | Readonly<{ ok: true; value: string | null }>
   | DateOnlyValidationError;

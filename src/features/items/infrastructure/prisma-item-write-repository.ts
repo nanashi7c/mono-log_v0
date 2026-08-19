@@ -3,6 +3,7 @@ import type {
   ItemImageChange,
   ItemWriteRepository,
 } from "@/features/items/application/item-write-ports";
+import { ItemWriteRejectedError } from "@/features/items/application/item-write-error";
 import {
   resolveCategoryIds,
   syncItemCategories,
@@ -29,14 +30,14 @@ async function consumePendingImageUpload(
     select: { objectKey: true },
   });
   if (!upload) {
-    throw new Error("画像アップロードの有効期限が切れました。画像を選択し直してください。");
+    throw new ItemWriteRejectedError("image_upload_expired");
   }
 
   const consumed = await tx.pendingItemImageUpload.deleteMany({
     where: { id: uploadId, userId },
   });
   if (consumed.count !== 1) {
-    throw new Error("画像アップロードは既に使用されています。画像を選択し直してください。");
+    throw new ItemWriteRejectedError("image_upload_consumed");
   }
   return upload.objectKey;
 }
