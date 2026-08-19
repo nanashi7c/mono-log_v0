@@ -151,7 +151,10 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$WORKDIR"
-aws s3 cp "s3://$BUCKET/$PREFIX/" "$WORKDIR/" --recursive --region "$REGION"
+# Fetch known objects explicitly so the EC2 role only needs s3:GetObject.
+# Recursive copy would require the broader s3:ListBucket permission.
+aws s3 cp "s3://$BUCKET/$PREFIX/manifest.txt" "$WORKDIR/manifest.txt" --region "$REGION"
+aws s3 cp "s3://$BUCKET/$PREFIX/baseline.txt" "$WORKDIR/baseline.txt" --region "$REGION"
 
 HOST=$(aws ssm get-parameter --region "$REGION" --name "/$PROJECT/db/host" --query Parameter.Value --output text)
 MPW=$(aws ssm get-parameter --region "$REGION" --name "/$PROJECT/db/password" --with-decryption --query Parameter.Value --output text)
@@ -192,6 +195,7 @@ for entry in "${MIGRATION_ENTRIES[@]}"; do
     echo "Invalid migration manifest entry: $entry" >&2
     exit 1
   fi
+  aws s3 cp "s3://$BUCKET/$PREFIX/$migration" "$WORKDIR/$migration" --region "$REGION"
   if [ ! -f "$WORKDIR/$migration" ]; then
     echo "Migration file not found: $migration" >&2
     exit 1
