@@ -61,7 +61,7 @@ flowchart LR
     Infra -->|"署名発行・検査・削除"| S3["S3 item-images<br/>非公開"]
     Browser -->|"署名付きPOST / GET<br/>画像本体を直接転送"| S3
     SSM["SSM Parameter Store"] -->|"起動時に環境変数を注入"| Runtime
-    ECR["ECR"] -->|"Docker image pull"| Runtime
+    ECR["ECR<br/>immutable tags"] -->|"commit SHA tagをpull"| Runtime
 ```
 
 アプリ内部は、技術詳細をapplication/domainから遠ざける方向で分割しています。画面・Server Action・Route Handlerがユースケースを呼び、DBやS3の実装はapplication層で定義したportを実装します。
@@ -82,6 +82,7 @@ flowchart LR
 - domainはI/Oを持たない純粋関数、applicationはユースケースとport、infrastructureはPrisma・AWS SDKの詳細を担当する。
 - Cookie・URL・DBを状態の正本とし、クライアント側はフォームやメニューなど短命なUI状態だけをReact hooksで持つ。
 - S3の署名はアプリが発行し、画像本体の転送はブラウザとS3の間で行う。ただしアイテム保存との確定状態はDBで管理する。
+- 本番イメージはGit commit SHAを上書き不可のECRタグとして保存し、現在・直前の配備タグをSSMで管理する。
 
 AWSリソース、ネットワーク、Docker、運用上の制約と改善優先度は[インフラ設計](docs/infra-design.md)を参照してください。
 

@@ -427,17 +427,35 @@ resource "aws_ssm_parameter" "s3_bucket" {
 ```hcl
 resource "aws_ecr_repository" "app" {
   name                 = "${var.project_name}-app"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration { encryption_type = "AES256" }
   tags = { Name = "${var.project_name}-app" }
 }
+
+resource "aws_ssm_parameter" "deployed_image_tag" {
+  name        = "/${var.project_name}/deploy/image_tag"
+  description = "Immutable ECR image tag currently selected for deployment"
+  type        = "String"
+  value       = "not-deployed"
+  lifecycle { ignore_changes = [value] }
+}
+
+resource "aws_ssm_parameter" "previous_deployed_image_tag" {
+  name        = "/${var.project_name}/deploy/previous_image_tag"
+  description = "Previous immutable ECR image tag available for rollback"
+  type        = "String"
+  value       = "not-deployed"
+  lifecycle { ignore_changes = [value] }
+}
 ```
 **逐行解説**
 - `aws_ecr_repository "app"`: Dockerイメージ置き場(ECR)。
-- `image_tag_mutability = "MUTABLE"`: 同じタグ(例`latest`)の上書きを許す。
+- `image_tag_mutability = "IMMUTABLE"`: commit SHA等の同じタグを上書きできないようにし、タグとイメージ内容の対応を固定する。
 - `image_scanning_configuration { scan_on_push = true }`: push時に脆弱性スキャン。
 - `encryption_configuration { encryption_type = "AES256" }`: 保存時暗号化。
+- 2つのSSMパラメータは現在と直前の配備タグを保持する。初回は`not-deployed`で、`deploy.ps1`が実際のタグへ変更する。
+- `ignore_changes = [value]`: Terraformはパラメータ自体を管理しつつ、デプロイ後の値を初期値へ戻さない。
 
 ```hcl
 resource "aws_ecr_lifecycle_policy" "app" {
@@ -792,7 +810,10 @@ resource "aws_instance" "app" {
   subnet_id              = aws_subnet.public_a.id
   vpc_security_group_ids = [aws_security_group.ec2.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
-  depends_on             = [aws_ssm_parameter.cloudfront_origin_verify_secret]
+  depends_on = [
+    aws_ssm_parameter.cloudfront_origin_verify_secret,
+    aws_ssm_parameter.deployed_image_tag,
+  ]
   user_data = <<-EOF
 ... (後述の起動スクリプト) ...
 EOF
@@ -813,7 +834,7 @@ EOF
 - `subnet_id = aws_subnet.public_a.id`: publicサブネットに配置(外部到達のため)。
 - `vpc_security_group_ids`: 上のEC2用SGを適用。
 - `iam_instance_profile`: 上のプロファイル＝ロールを付与。
-- `depends_on`: オリジン検証用のSSM SecureStringが作られてからEC2を起動し、初回の設定取得失敗を防ぐ。
+- `depends_on`: オリジン検証秘密値と配備タグ用SSMパラメータが作られてからEC2を起動し、初回の設定取得失敗を防ぐ。
 - `user_data = <<-EOF ... EOF`: **起動時に1回だけ走るシェルスクリプト**(下で詳説)。`<<-EOF`はヒアドキュメント(複数行文字列)。
 - `metadata_options { http_tokens = "required" }`: IMDSv2を強制(認証情報の盗用対策)。
 - `root_block_device { volume_size = 30; volume_type = "gp3"; encrypted = true }`: ルートディスク30GB(最新AL2023 AMIのスナップショットが30GBのため20では作成失敗)・gp3・暗号化。
@@ -835,11 +856,11 @@ cat > /etc/mono-log.env <<ENV
 REGION=${var.aws_region}
 PROJECT=${var.project_name}
 REGISTRY=${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com
-IMAGE=${aws_ecr_repository.app.repository_url}:latest
+REPOSITORY=${aws_ecr_repository.app.repository_url}
 ENV
 ```
 - `cat > /etc/mono-log.env <<ENV ... ENV`: 非機密の設定ファイルを書き出す。`${var...}`等は**Terraformが値を埋め込む**(apply時に確定)。
-- `REGISTRY`/`IMAGE`: ECRのレジストリURLとイメージタグ(`:latest`)。
+- `REGISTRY`/`REPOSITORY`: ECRのログイン先とリポジトリURL。可変の配備タグはSSMから別に取得する。
 
 ```bash
 cat > /usr/local/bin/mono-log-run.sh <<'SCRIPT'
@@ -850,6 +871,15 @@ get() { aws ssm get-parameter --region "$REGION" --name "$1" $2 --query Paramete
 DB_HOST=$(get "/$PROJECT/db/host" "")
 ...
 ORIGIN_VERIFY_SECRET=$(get "/$PROJECT/cloudfront/origin_verify_secret" "--with-decryption")
+IMAGE_TAG=$(get "/$PROJECT/deploy/image_tag" "")
+if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "not-deployed" ]; then
+  echo "No deployed image tag is configured in SSM" >&2
+  exit 1
+fi
+IMAGE="$REPOSITORY:$IMAGE_TAG"
+aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+docker pull "$IMAGE"
+docker rm -f mono-log >/dev/null 2>&1 || true
 docker run -d --name mono-log --restart unless-stopped -p 80:3000 \
   -e NODE_ENV=production \
   -e DB_HOST="$DB_HOST" ... \
@@ -861,9 +891,10 @@ chmod +x /usr/local/bin/mono-log-run.sh
 - `cat > ... <<'SCRIPT' ... SCRIPT`: コンテナ起動スクリプトを書き出す。クォート付き`'SCRIPT'`なので**中の`$`はそのまま**(Terraformでなく実行時のbashが評価)。
 - `. /etc/mono-log.env`: 上のenvファイルを読み込み(`REGION`等が使える)。
 - `get() { aws ssm get-parameter ... }`: SSMから値を取る関数。`$2`に`--with-decryption`を渡せば`SecureString`を復号。
-- `DB_HOST=$(get ...)`等: DB接続情報・Cognito ID・バケット名・**アプリ用DBパスワードとCloudFrontオリジン検証秘密値(復号)**をSSMから取得。
+- `DB_HOST=$(get ...)`等: DB接続情報・Cognito ID・バケット名・**アプリ用DBパスワードとCloudFrontオリジン検証秘密値(復号)**に加え、現在の固定イメージタグをSSMから取得。
+- 配備タグが初期値`not-deployed`なら、存在しないイメージを暗黙に使わず明示的に停止する。`deploy.ps1`の初回成功後は、再起動時も同じタグをpullする。
 - `aws ecr get-login-password | docker login ...`: ECRにログイン。
-- `docker pull "$IMAGE"` → `docker rm -f mono-log || true` → `docker run -d ...`: 最新イメージを取得し、既存コンテナを消してから起動。
+- `docker pull "$IMAGE"` → `docker rm -f mono-log || true` → `docker run -d ...`: SSMで選ばれた固定タグを取得し、既存コンテナを消してから起動。
 - `docker run`の主オプション: `-d`(常駐)、`--restart unless-stopped`(再起動時も自動復帰)、`-p 80:3000`(ホスト80→コンテナ3000)、`-e KEY=VALUE`(環境変数。DB/Cognito/S3/オリジン検証秘密値/NODE_ENV=productionを渡す)。
 - `chmod +x`: スクリプトに実行権限。
 
@@ -888,7 +919,7 @@ systemctl enable --now mono-log.service || true
 - systemdサービス定義。`After/Requires=docker.service`でDocker起動後に動く。
 - `Type=oneshot`+`RemainAfterExit=yes`: 一度走って終わる処理を「起動済み」とみなす。
 - `ExecStart`: 上の起動スクリプトを実行。
-- `Restart=on-failure`/`RestartSec=30`: 失敗時に30秒ごと再試行（**初回はイメージ未pushで失敗するが、push後に自動で起動**する仕組み）。
+- `Restart=on-failure`/`RestartSec=30`: 失敗時に30秒ごと再試行。初回は配備タグが`not-deployed`なので待機し、`deploy.ps1`がタグを設定してserviceを再起動する。
 - `systemctl daemon-reload` → `enable --now`: 定義を読み込み、有効化＋起動。
 
 ### 5-2. 確認
@@ -1008,7 +1039,7 @@ aws ssm get-parameter --region ap-northeast-1 --name /mono-log/db/host          
 - `terraform output`: 1-5で定義した出力(アカウントID等)を表示。
 - 各`aws ssm get-parameter`: アプリが使う値(Cognito ID/バケット名/DBホスト)が実際に入っているか確認。`--query Parameter.Value`で値だけ、`--output text`で素の文字列。
 
-> この時点ではEC2にイメージが無くアプリ未起動（systemdが再試行中）。
+> 初回構築では配備タグが`not-deployed`のためアプリ未起動（systemdが再試行中）。再作成時はSSMに残る固定タグのイメージがECRにあれば自動起動する。
 
 ---
 
